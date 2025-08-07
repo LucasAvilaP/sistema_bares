@@ -1,0 +1,214 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="container mt-4">
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-success" role="alert">
+        {{ message }}
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  <h2 class="h4 fw-semibold mb-2">📊 Dashboard do Bar</h2>
+  <p><strong>Bar Selecionado:</strong> {{ bar.nome }}</p>
+  <p><strong>Usuário:</strong> {{ request.user.username }}</p>
+
+  <!-- Linha com os dois gráficos lado a lado -->
+  <div class="row mt-4 g-4">
+
+    <!-- Gráfico: Top Estoque -->
+    <div class="col-12 col-md-6">
+      <div class="bg-white p-4 rounded shadow-sm">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="h6 fw-bold m-0">📦 Produtos com Maior Quantidade no Estoque</h3>
+        <button id="btnAlternarTipo" class="btn btn-sm btn-outline-primary">🔄 Mudar Tipo</button>
+      </div>
+        <canvas id="graficoConsumo" class="w-100" style="max-height: 300px; aspect-ratio: 4 / 3;"></canvas>
+      </div>
+    </div>
+
+    <!-- Gráfico: Produtos Mais Requisitados -->
+    <div class="col-12 col-md-6">
+      <div class="bg-white p-4 rounded shadow-sm">
+        <h3 class="h6 fw-bold mb-3">🏆 Produtos Mais Requisitados</h3>
+        <canvas id="graficoRanking" class="w-100" style="aspect-ratio: 4 / 3;"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Últimas Requisições e Transferências -->
+  <div class="row mt-4 g-4">
+    <div class="col-12 col-md-6">
+      <div class="bg-white p-4 rounded shadow-sm">
+        <h3 class="h6 fw-bold mb-3">🧾 Últimas Requisições</h3>
+        <ul class="small">
+          {% for r in ultimas_requisicoes %}
+          <li class="mb-1">
+            {{ r.data_solicitacao|date:"d/m H:i" }} — {{ r.produto.nome }} ({{ r.quantidade_solicitada }}) —
+            {% if r.status == 'APROVADA' %}
+              <span class="text-success fw-semibold">Aprovada</span>
+            {% elif r.status == 'NEGADA' %}
+              <span class="text-danger fw-semibold">Negada</span>
+            {% else %}
+              <span class="text-muted fw-semibold">{{ r.status }}</span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-6">
+      <div class="bg-white p-4 rounded shadow-sm">
+        <h3 class="h6 fw-bold mb-3">🔄 Últimas Transferências</h3>
+        <ul class="small">
+          {% for t in ultimas_transferencias %}
+          <li class="mb-1">
+            {{ t.data_transferencia|date:"d/m" }} — {{ t.produto.nome }} → {{ t.destino.nome }} ({{ t.quantidade }})
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Estoque Atual -->
+  <div class="bg-white p-4 rounded shadow-sm mt-4">
+    <h3 class="h6 fw-bold mb-3">📦 Estoque Atual</h3>
+    <table class="table table-sm table-bordered">
+      <thead class="table-light">
+        <tr>
+          <th>Produto</th>
+          <th>Garrafas</th>
+          <th>Doses</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in estoque %}
+        <tr>
+          <td>{{ item.produto }}</td>
+          <td>{{ item.garrafas }}</td>
+          <td>{{ item.doses }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- JSON para os gráficos -->
+{{ dias|json_script:"jsonDias" }}
+{{ saidas|json_script:"jsonSaidas" }}
+{{ ranking_produtos|json_script:"jsonRankingProdutos" }}
+{{ ranking_totais|json_script:"jsonRankingTotais" }}
+
+<!-- Chart.js + plugins -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const dias = JSON.parse(document.getElementById('jsonDias').textContent);
+    const saidas = JSON.parse(document.getElementById('jsonSaidas').textContent);
+    const produtosRanking = JSON.parse(document.getElementById('jsonRankingProdutos').textContent);
+    const totaisRanking = JSON.parse(document.getElementById('jsonRankingTotais').textContent);
+
+    // Gráfico: Top Estoque
+    let tipoGrafico = 'doughnut';
+    const ctxConsumo = document.getElementById('graficoConsumo').getContext('2d');
+
+    const dadosConsumo = {
+      labels: dias,
+      datasets: [{
+        label: 'Quantidade no Estoque (garrafas + doses/10)',
+        data: saidas,
+        backgroundColor: [
+          '#8B008B',
+          '#4f46e5',
+          '#818cf8',
+          '#a5b4fc',
+          '#c7d2fe'
+        ],
+        borderColor: '#fff',
+        borderWidth: 1
+      }]
+    };
+
+    let graficoConsumo = new Chart(ctxConsumo, {
+      type: tipoGrafico,
+      data: dadosConsumo,
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: true, position: 'bottom' },
+          datalabels: {
+            color: '#fff',
+            font: { weight: 'bold' },
+            formatter: (value) => value
+          }
+        },
+        scales: tipoGrafico === 'bar' ? { y: { beginAtZero: true } } : {}
+      },
+      plugins: [ChartDataLabels]
+    });
+
+    // Alternar tipo (pizza <-> barra)
+    document.getElementById('btnAlternarTipo').addEventListener('click', () => {
+      tipoGrafico = tipoGrafico === 'doughnut' ? 'bar' : 'doughnut';
+      graficoConsumo.destroy();
+      graficoConsumo = new Chart(ctxConsumo, {
+        type: tipoGrafico,
+        data: dadosConsumo,
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { display: true, position: 'bottom' },
+            datalabels: {
+              color: tipoGrafico === 'bar' ? '#000' : '#fff',
+              anchor: tipoGrafico === 'bar' ? 'end' : 'center',
+              align: tipoGrafico === 'bar' ? 'top' : 'center',
+              font: { weight: 'bold' },
+              formatter: (value) => value
+            }
+          },
+          scales: tipoGrafico === 'bar' ? { y: { beginAtZero: true } } : {}
+        },
+        plugins: [ChartDataLabels]
+      });
+    });
+
+    // Gráfico: Produtos Mais Requisitados
+    new Chart(document.getElementById('graficoRanking').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: produtosRanking,
+        datasets: [{
+          label: 'Qtd. de Requisições',
+          data: totaisRanking,
+          backgroundColor: '#10b981'
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { display: true },
+          datalabels: {
+            anchor: 'end',
+            align: 'top',
+            color: '#000',
+            font: { weight: 'bold' },
+            formatter: (value) => value
+          }
+        },
+        scales: {
+          y: { beginAtZero: true }
+        }
+      },
+      plugins: [ChartDataLabels]
+    });
+  });
+</script>
+
+
+{% endblock %}

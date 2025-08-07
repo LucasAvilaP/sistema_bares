@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="container">
+    <h2 class="mb-4">📋 Registro de Consumo de Eventos</h2>
+
+    <!-- FORMULÁRIO DO NOVO EVENTO -->
+    <form method="post" action="{% url 'salvar_evento' %}" id="evento-form">
+        {% csrf_token %}
+        <div class="mb-3">
+            <label for="nome_evento" class="form-label">Nome do Evento:</label>
+            <input type="text" class="form-control" name="nome_evento" required>
+        </div>
+
+        <div class="row align-items-end mb-3">
+            <div class="col-md-4">
+                <label class="form-label">Produto</label>
+                <select class="form-select select2" id="produto-select">
+                    <option value="">Selecione</option>
+                    {% for produto in produtos %}
+                        <option value="{{ produto.id }}">{{ produto.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Garrafas</label>
+                <input type="number" class="form-control" id="garrafas" min="0" value="0">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Doses</label>
+                <input type="number" class="form-control" id="doses" min="0" value="0">
+            </div>
+            <div class="col-md-2 text-end">
+                <button type="button" class="btn btn-success w-100" onclick="adicionarProduto()">➕ Adicionar</button>
+            </div>
+        </div>
+
+        <hr>
+
+        <!-- LISTA TEMPORÁRIA DOS PRODUTOS -->
+        <div id="lista-produtos" class="mb-3"></div>
+
+        <div class="d-flex justify-content-end">
+            <button type="submit" class="btn btn-primary">✅ Concluir Evento</button>
+        </div>
+    </form>
+
+    <hr class="my-5">
+
+    <!-- EXPORTAÇÃO -->
+    <a href="{% url 'exportar_consolidado_eventos_excel' %}" class="btn btn-outline-success mb-3">
+        📤 Exportar Consolidado para Excel
+    </a>
+
+    <!-- CONSOLIDADO DO DIA -->
+    <h4 class="mb-3">📦 Consolidado do Dia (Todos os Eventos)</h4>
+    <table class="table table-bordered bg-white">
+        <thead class="table-light">
+            <tr>
+                <th>Produto</th>
+                <th>Garrafas</th>
+                <th>Doses</th>
+                <th>Doses (ml)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for produto, dados in consolidado.items %}
+            <tr>
+                <td>{{ produto }}</td>
+                <td>{{ dados.garrafas }}</td>
+                <td>{{ dados.doses }}</td>
+                <td>{{ dados.ml }} ml</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <hr class="my-5">
+
+    <!-- LISTA DE EVENTOS REGISTRADOS -->
+    <h4 class="mb-3">📅 Eventos de Hoje</h4>
+    {% for evento in eventos %}
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>{{ evento.nome }}</strong> — {{ evento.data_criacao|date:"H:i" }} por {{ evento.responsavel }}
+                </div>
+                <form method="post" action="{% url 'excluir_evento' evento.id %}" onsubmit="return confirm('Tem certeza que deseja excluir este evento?');">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+                </form>
+            </div>
+            <ul class="list-group list-group-flush">
+                {% for item in evento.produtos.all %}
+                    <li class="list-group-item">
+                        {{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% empty %}
+        <p>Nenhum evento registrado hoje.</p>
+    {% endfor %}
+</div>
+
+<!-- Select2 + Estilo padronizado -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+    .select2-container .select2-selection--single {
+        height: calc(2.375rem + 2px);
+        padding: 0.375rem 0.75rem;
+        font-size: 1rem;
+        line-height: 1.5;
+        border-radius: 0.375rem;
+        display: flex;
+        align-items: center;
+    }
+    .select2-selection__rendered {
+        line-height: 1.5 !important;
+    }
+    .select2-selection__arrow {
+        height: 100% !important;
+    }
+</style>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<script>
+    $(document).ready(function () {
+        $('.select2').select2({
+            placeholder: 'Selecione',
+            allowClear: true
+        });
+    });
+
+    let produtos = [];
+
+    function adicionarProduto() {
+        const produtoSelect = document.getElementById('produto-select');
+        const produtoNome = produtoSelect.options[produtoSelect.selectedIndex].text;
+        const produtoId = produtoSelect.value;
+        const garrafas = parseInt(document.getElementById('garrafas').value) || 0;
+        const doses = parseInt(document.getElementById('doses').value) || 0;
+
+        if (garrafas === 0 && doses === 0) {
+            alert("Informe pelo menos uma garrafa ou dose.");
+            return;
+        }
+
+        produtos.push({ id: produtoId, nome: produtoNome, garrafas, doses });
+        atualizarLista();
+    }
+
+    function atualizarLista() {
+        const lista = document.getElementById('lista-produtos');
+        lista.innerHTML = "";
+        document.querySelectorAll('.input-produto').forEach(el => el.remove());
+
+        produtos.forEach((p, index) => {
+            lista.innerHTML += `
+                <div class="d-flex justify-content-between border p-2 mb-1">
+                    <div>${p.nome} — ${p.garrafas} garrafas, ${p.doses} doses</div>
+                    <button type="button" class="btn btn-sm btn-danger" onclick="removerProduto(${index})">Remover</button>
+                </div>
+                <input type="hidden" name="produto_id[]" value="${p.id}" class="input-produto">
+                <input type="hidden" name="garrafas[]" value="${p.garrafas}" class="input-produto">
+                <input type="hidden" name="doses[]" value="${p.doses}" class="input-produto">
+            `;
+        });
+    }
+
+    function removerProduto(index) {
+        produtos.splice(index, 1);
+        atualizarLista();
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,30 @@
+# Bytecode
+*.pyc
+__pycache__/
+
+# SQLite database
+db.sqlite3
+
+# VSCode configs
+.vscode/
+
+# Virtual env
+venv/
+.env
+
+# Static (caso futuramente você use `collectstatic`)
+staticfiles/
+static/
+
+# Mídia (se futuramente adicionar upload de imagens, previne já)
+media/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários (criados por editores ou sistemas de build)
+*.log
+*.bak
+*.swp
+*.swo

@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% load custom_filters %}
+{% block content %}
+<h2 class="text-2xl font-bold mb-4">Relatório - Saída de Estoque para o Bar</h2>
+
+<form method="get" class="mb-4 flex items-center gap-4 flex-wrap">
+    <label for="mes">Mês:</label>
+    <select name="mes" id="mes" class="border rounded px-2 py-1">
+        <option value="">Todos</option>
+        {% for m in 1|to_range:13 %}
+            <option value="{{ m|stringformat:"02d" }}" {% if m|stringformat:"02d" == mes %}selected{% endif %}>{{ m|stringformat:"02d" }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="ano">Ano:</label>
+    <input type="number" name="ano" id="ano" value="{{ ano }}" placeholder="Todos" class="border rounded px-2 py-1 w-24" />
+
+    <label for="produto">Produto:</label>
+    <input type="text" name="produto" id="produto" value="{{ produto }}" placeholder="Buscar por nome" class="border rounded px-2 py-1 w-48" />
+
+    <button type="submit" class="bg-black text-white px-4 py-1 rounded">Filtrar</button>
+</form>
+
+<form method="get" action="{% url 'exportar_saida_estoque_excel' %}" class="mb-4">
+    <input type="hidden" name="mes" value="{{ mes }}">
+    <input type="hidden" name="ano" value="{{ ano }}">
+    <input type="hidden" name="produto" value="{{ produto }}">
+    <button type="submit" class="bg-black text-white px-4 py-1 rounded">
+        Exportar para Excel
+    </button>
+</form>
+{% if requisicoes %}
+    <p class="mb-2 text-sm text-gray-600">
+        Exibindo {{ requisicoes|length }} requisição(ões){% if produto %} para o produto <strong>{{ produto }}</strong>{% endif %}.
+        Total solicitado: <strong>
+            Total solicitado: {{ requisicoes|sum_quantidade_solicitada }}
+
+        </strong>
+    </p>
+{% endif %}
+
+
+<table class="table-auto w-full border-collapse border border-gray-300">
+    <thead>
+        <tr class="bg-gray-100">
+            <th class="border px-4 py-2">Produto</th>
+            <th class="border px-4 py-2">Quantidade</th>
+            <th class="border px-4 py-2">Status</th>
+            <th class="border px-4 py-2">Data</th>
+            <th class="border px-4 py-2">Solicitado por</th>
+            <th class="border px-4 py-2">Aprovado/Negado por</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% if requisicoes %}
+            {% for req in requisicoes %}
+                <tr>
+                    <td class="border px-4 py-2">{{ req.produto.nome }}</td>
+                    <td class="border px-4 py-2">{{ req.quantidade_solicitada }}</td>
+                    <td class="border px-4 py-2">{{ req.get_status_display }}</td>
+                    <td class="border px-4 py-2">{{ req.data_solicitacao|date:"d/m/Y H:i" }}</td>
+                    <td class="border px-4 py-2">{{ req.usuario.username }}</td>
+                    <td class="border px-4 py-2">
+                        {% if req.usuario_aprovador %}
+                            {{ req.usuario_aprovador.username }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        {% else %}
+            <tr>
+                <td colspan="6" class="text-center py-4">Nenhuma requisição encontrada.</td>
+            </tr>
+        {% endif %}
+    </tbody>
+</table>
+{% endblock %}

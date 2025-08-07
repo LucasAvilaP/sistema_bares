@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% load custom_filters %}
+{% block content %}
+<div class="container mt-4">
+    <h2 class="mb-4">🔄 Histórico de Transferências</h2>
+
+    <form method="GET" class="row g-3 align-items-end mb-4">
+        <div class="col-auto">
+            <label class="form-label">Mês:</label>
+            <select name="mes" class="form-select">
+                {% for m in 1|add:0|until:13 %}
+                    <option value="{{ m }}" {% if request.GET.mes == m|stringformat:"s" %}selected{% endif %}>{{ m|stringformat:"02d" }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label">Ano:</label>
+            <input type="number" name="ano" class="form-control" value="{{ request.GET.ano|default:now.year }}" min="2020" max="{{ now.year }}">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary">🔍 Filtrar</button>
+        </div>
+    </form>
+
+    {% if not agrupado %}
+        <div class="alert alert-info">Nenhuma transferência registrada.</div>
+    {% else %}
+        {% if not filtro_ativo %}
+            <div class="alert alert-secondary">Mostrando as 10 últimas transferências registradas.</div>
+        {% endif %}
+    {% endif %}
+
+    <div class="accordion" id="accordionTransferencias">
+        {% for data, itens in agrupado.items %}
+        <div class="accordion-item">
+            <h2 class="accordion-header" id="heading{{ forloop.counter }}">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ forloop.counter }}" aria-expanded="false" aria-controls="collapse{{ forloop.counter }}">
+                    {{ data|date:"d/m/Y" }} — {{ itens|length }} transferências
+                </button>
+            </h2>
+            <div id="collapse{{ forloop.counter }}" class="accordion-collapse collapse" aria-labelledby="heading{{ forloop.counter }}" data-bs-parent="#accordionTransferencias">
+                <div class="accordion-body">
+                    {% for t in itens %}
+                    <div class="mb-3 p-3 border rounded bg-light">
+                        <h5 class="mb-2"><strong>{{ t.produto.nome }}</strong></h5>
+                        <p class="mb-1">📤 Origem: <strong>{{ t.origem.nome }}</strong></p>
+                        <p class="mb-1">📥 Destino: <strong>{{ t.destino.nome }}</strong></p>
+                        <p class="mb-1">🔢 Quantidade: {{ t.quantidade }}</p>
+                        <p class="mb-1">👤 Usuário: {{ t.usuario.username }}</p>
+                        <small class="text-muted">⏱️ Registrado em: {{ t.data_transferencia|date:"d/m/Y H:i" }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

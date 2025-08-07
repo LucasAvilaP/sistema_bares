@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container mt-4">
+    <h2 class="mb-4">📅 Relatório de Eventos</h2>
+
+    <!-- Formulário de Filtros -->
+    <form method="get" class="row g-3 mb-4">
+        <div class="col-md-3">
+            <label class="form-label">Data Início</label>
+            <input type="date" name="data_inicio" class="form-control" value="{{ data_inicio|date:'Y-m-d' }}">
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Data Fim</label>
+            <input type="date" name="data_fim" class="form-control" value="{{ data_fim|date:'Y-m-d' }}">
+        </div>
+        <div class="col-md-4">
+            <label class="form-label">Nome do Evento</label>
+            <input type="text" name="nome_evento" class="form-control" placeholder="Ex: Aniversário, Festa..." value="{{ request.GET.nome_evento }}">
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">🔎 Filtrar</button>
+        </div>
+    </form>
+
+    {% if eventos %}
+        <h5 class="mb-3">📦 Consolidado do Período</h5>
+
+        <!-- Botão de Exportar Excel com todos os filtros -->
+        <a href="{% url 'exportar_relatorio_eventos_excel' %}?data_inicio={{ data_inicio }}&data_fim={{ data_fim }}&nome_evento={{ request.GET.nome_evento }}" class="btn btn-success mb-3">
+            📥 Exportar Relatório para Excel
+        </a>
+
+        <!-- Tabela Consolidada -->
+        <table class="table table-bordered bg-white">
+            <thead class="table-light">
+                <tr>
+                    <th>Produto</th>
+                    <th>Garrafas</th>
+                    <th>Doses</th>
+                    <th>Doses (ml)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for produto, dados in consolidado.items %}
+                <tr>
+                    <td>{{ produto }}</td>
+                    <td>{{ dados.garrafas }}</td>
+                    <td>{{ dados.doses }}</td>
+                    <td>{{ dados.ml }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <hr>
+
+        <!-- Listagem dos Eventos -->
+        <h5>📋 Eventos no Período</h5>
+        {% for evento in eventos %}
+            <div class="card mb-3">
+                <div class="card-header">
+                    <strong>{{ evento.nome }}</strong> — {{ evento.data_criacao|date:"d/m/Y H:i" }} por {{ evento.responsavel }}
+                </div>
+                <ul class="list-group list-group-flush">
+                    {% for item in evento.produtos.all %}
+                        <li class="list-group-item">
+                            {{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses ({{ item.doses|add:"0"|floatformat:0 }} ml)
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="text-muted">Nenhum evento encontrado no período selecionado.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Entrada de Mercadorias{% endblock %}
+
+{% block content %}
+<div class="container bg-white p-4 rounded shadow mt-4">
+    <h3 class="mb-4">📥 Entrada de Mercadorias no Estoque Central</h3>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-success" role="alert">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="table-responsive">
+            <table class="table table-bordered align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 60%">Produto</th>
+                        <th style="width: 30%">Quantidade</th>
+                        <th style="width: 10%">Remover</th>
+                    </tr>
+                </thead>
+                <tbody id="tabela-produtos">
+                    <tr>
+                        <td>
+                            <select name="produto[]" class="form-select select2" required>
+                                <option value="">Selecione um produto</option>
+                                {% for produto in produtos %}
+                                    <option value="{{ produto.id }}">{{ produto.nome }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td>
+                            <input type="text" name="quantidade[]" class="form-control" placeholder="Ex: 12 ou 12,5" required>
+                        </td>
+                        <td class="text-center">
+                            <button type="button" class="btn btn-danger btn-sm" onclick="removerLinha(this)">✕</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <button type="button" class="btn btn-outline-secondary mb-3" onclick="adicionarLinha()">➕ Adicionar Produto</button>
+        <br>
+        <button type="submit" class="btn btn-success">✅ Salvar Entrada</button>
+    </form>
+</div>
+
+<!-- Select2 + Estilo -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+    .select2-container .select2-selection--single {
+        height: calc(2.375rem + 2px);
+        padding: 0.375rem 0.75rem;
+        font-size: 1rem;
+        line-height: 1.5;
+        border-radius: 0.375rem;
+        display: flex;
+        align-items: center;
+    }
+    .select2-selection__rendered {
+        line-height: 1.5 !important;
+    }
+    .select2-selection__arrow {
+        height: 100% !important;
+    }
+</style>
+
+<!-- Scripts -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<script>
+    function inicializarSelect2() {
+        $('.select2').select2({
+            placeholder: 'Selecione um produto',
+            allowClear: true,
+            width: '100%'
+        });
+    }
+
+    $(document).ready(function () {
+        inicializarSelect2();
+    });
+
+    function adicionarLinha() {
+        const tabela = document.getElementById('tabela-produtos');
+        const linhaOriginal = tabela.rows[0];
+
+        // Remove select2 temporariamente da linha original para clonagem limpa
+        const selectOriginal = linhaOriginal.querySelector('.select2');
+        $(selectOriginal).select2('destroy');
+
+        // Clona a linha sem os efeitos do Select2
+        const novaLinha = linhaOriginal.cloneNode(true);
+
+        // Restaura o select2 na linha original
+        inicializarSelect2();
+
+        // Limpa os campos da nova linha
+        novaLinha.querySelectorAll('input').forEach(input => input.value = '');
+        novaLinha.querySelectorAll('select').forEach(select => {
+            select.selectedIndex = 0;
+            select.classList.remove('select2-hidden-accessible'); // remove vestígios
+            $(select).next('.select2').remove(); // remove container duplicado
+        });
+
+        tabela.appendChild(novaLinha);
+
+        // Inicializa apenas o novo select2 da nova linha
+        $(novaLinha).find('select.select2').select2({
+            placeholder: 'Selecione um produto',
+            allowClear: true,
+            width: '100%'
+        });
+    }
+
+
+    function removerLinha(botao) {
+        const linha = botao.closest('tr');
+        const totalLinhas = document.querySelectorAll('#tabela-produtos tr').length;
+        if (totalLinhas > 1) {
+            linha.remove();
+        } else {
+            alert('Você deve ter pelo menos um produto na entrada.');
+        }
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2 class="mb-4">🔁 Transferência entre Bares</h2>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags|default:'success' }}" role="alert">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    <form method="POST">
+        {% csrf_token %}
+        <div class="row mb-3">
+            <div class="col-md-5">
+                <label for="produto" class="form-label">Produto</label>
+                <select id="produto" class="form-select select2">
+                    <option value="">Selecione</option>
+                    {% for p in produtos %}
+                        <option value="{{ p.id }}">{{ p.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label for="quantidade" class="form-label">Quantidade</label>
+                <input type="number" id="quantidade" step="0.01" min="0" class="form-control" placeholder="Ex: 5.0">
+            </div>
+
+            <div class="col-md-4">
+                <label for="bar_destino" class="form-label">Bar de destino</label>
+                <select id="bar_destino" class="form-select select2">
+                    <option value="">Selecione</option>
+                    {% for bar in bares_destino %}
+                        <option value="{{ bar.id }}">{{ bar.nome }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-end mb-4">
+            <button type="button" class="btn btn-success" onclick="adicionarItem()">➕ Adicionar</button>
+        </div>
+
+        <div id="lista" class="mb-4"></div>
+
+        <div class="d-flex justify-content-end">
+            <button type="submit" class="btn btn-primary">🚚 Transferir</button>
+        </div>
+    </form>
+</div>
+
+<!-- Select2 + Estilo compatível com Bootstrap -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+    .select2-container .select2-selection--single {
+        height: calc(2.375rem + 2px);
+        padding: 0.375rem 0.75rem;
+        font-size: 1rem;
+        line-height: 1.5;
+        border-radius: 0.375rem;
+        display: flex;
+        align-items: center;
+    }
+
+    .select2-selection__rendered {
+        line-height: 1.5 !important;
+    }
+
+    .select2-selection__arrow {
+        height: 100% !important;
+    }
+</style>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<script>
+    $(document).ready(function() {
+        $('.select2').select2({
+            placeholder: 'Selecione',
+            allowClear: true
+        });
+    });
+
+    function adicionarItem() {
+        const selectProduto = document.getElementById("produto");
+        const produtoId = selectProduto.value;
+        const produtoNome = selectProduto.options[selectProduto.selectedIndex].text;
+
+        const quantidade = document.getElementById("quantidade").value;
+        const selectDestino = document.getElementById("bar_destino");
+        const destinoId = selectDestino.value;
+        const destinoNome = selectDestino.options[selectDestino.selectedIndex].text;
+
+        if (!produtoId || !quantidade || !destinoId || parseFloat(quantidade) <= 0) {
+            alert("Preencha todos os campos corretamente.");
+            return;
+        }
+
+        const lista = document.getElementById("lista");
+        lista.innerHTML = ''; // só permite uma transferência por vez
+
+        const item = document.createElement("div");
+        item.classList.add("alert", "alert-secondary", "d-flex", "justify-content-between", "align-items-center");
+
+        item.innerHTML = `
+            <div>
+                <strong>${produtoNome}</strong> → ${destinoNome} (${quantidade})
+                <input type="hidden" name="produto" value="${produtoId}">
+                <input type="hidden" name="quantidade" value="${quantidade}">
+                <input type="hidden" name="bar_destino" value="${destinoId}">
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.parentElement.remove()">Remover</button>
+        `;
+
+        lista.appendChild(item);
+
+        document.getElementById("quantidade").value = "";
+        selectProduto.selectedIndex = 0;
+        selectDestino.selectedIndex = 0;
+    }
+</script>
+{% endblock %}

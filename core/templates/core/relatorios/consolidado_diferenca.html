@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% load custom_filters %}
+{% block content %}
+<h2 class="text-2xl font-bold mb-4">Relatório Consolidado - Diferença do Bar</h2>
+
+<form method="get" class="mb-4 flex items-center gap-4">
+    <label for="mes">Mês:</label>
+    <select name="mes" id="mes" class="border rounded px-2 py-1">
+        <option value="">Todos</option>
+        {% for m in 1|to_range:13 %}
+            <option value="{{ m|stringformat:"02d" }}" {% if m|stringformat:"02d" == mes %}selected{% endif %}>{{ m|stringformat:"02d" }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="ano">Ano:</label>
+    <input type="number" name="ano" id="ano" value="{{ ano }}" placeholder="Todos" class="border rounded px-2 py-1 w-24" />
+
+    <button type="submit" class="bg-black text-white px-4 py-1 rounded">Filtrar</button>
+</form>
+<form method="get" action="{% url 'relatorio_consolidado_excel' %}" class="mb-4">
+    <input type="hidden" name="mes" value="{{ mes }}">
+    <input type="hidden" name="ano" value="{{ ano }}">
+    <button type="submit" class="bg-black text-white px-4 py-1 rounded">
+        Exportar para Excel
+    </button>
+</form>
+
+{% if dados_agrupados %}
+    {% for data, produtos in dados_agrupados.items %}
+        <h3 class="text-lg font-semibold mt-6 mb-2">📅 {{ data }} — Total: {{ produtos|length }} produto(s)</h3>
+        <table class="table-auto w-full border-collapse border border-gray-300 mb-6">
+            <thead>
+                <tr class="bg-gray-100">
+                    <th class="border px-4 py-2">Produto</th>
+                    <th class="border px-4 py-2">Requisitado</th>
+                    <th class="border px-4 py-2">Contagem (Garrafas)</th>
+                    <th class="border px-4 py-2">Contagem (Doses)</th>
+                    <th class="border px-4 py-2">Diferença</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for produto_nome, dados in produtos.items %}
+                    <tr>
+                        <td class="border px-4 py-2">{{ produto_nome }}</td>
+                        <td class="border px-4 py-2">{{ dados.quantidade_requisitada|floatformat:2 }}</td>
+                        <td class="border px-4 py-2">{{ dados.cheias }}</td>
+                        <td class="border px-4 py-2">{{ dados.doses|floatformat:2 }}</td>
+                        <td class="border px-4 py-2 font-semibold {% if dados.diferenca > 0 %}text-red-600{% elif dados.diferenca < 0 %}text-blue-600{% else %}text-green-600{% endif %}">
+                            {{ dados.diferenca|floatformat:2 }}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endfor %}
+{% else %}
+    <p class="text-gray-600 mt-6">Nenhum dado encontrado para os filtros selecionados.</p>
+{% endif %}
+{% endblock %}
