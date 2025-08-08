@@ -8,8 +8,9 @@ import openpyxl
 import io
 from io import BytesIO
 import xlsxwriter
-from django.utils.timezone import is_aware
-from openpyxl.styles import Font
+from django.utils.timezone import is_aware, localtime
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.formatting.rule import ColorScaleRule
 from django.utils import timezone
 from django.db.models import Sum, Max, Q, Count
 from openpyxl.utils import get_column_letter
@@ -23,6 +24,7 @@ from django.utils.timezone import now
 from django.utils.dateparse import parse_date
 from babel.dates import parse_date
 from datetime import datetime, date
+from django.utils.text import slugify
 
 def login_view(request):
     context = {}
@@ -864,116 +866,419 @@ def relatorio_contagem_atual(request):
 
 
 @login_required
+@login_required
 def relatorio_eventos(request):
-    data_inicio_str = request.GET.get('data_inicio')
-    data_fim_str = request.GET.get('data_fim')
-    nome_evento = request.GET.get('nome_evento', '').strip()
+    # pega filtros (ou assume mês atual)
+    data_inicio_param = request.GET.get('data_inicio')
+    data_fim_param = request.GET.get('data_fim')
+    nome_evento = (request.GET.get('nome_evento') or "").strip()
 
-    eventos = Evento.objects.none()  # Começa vazio
-    consolidado = {}
-
-    filtros_aplicados = data_inicio_str or data_fim_str or nome_evento  # verifica se houve algum filtro
-
-    if filtros_aplicados:
-        eventos = Evento.objects.all()
-
-        if nome_evento:
-            eventos = eventos.filter(nome__icontains=nome_evento)
-
-        if data_inicio_str and data_fim_str:
-            try:
-                data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d").date()
-                data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d").date()
-                eventos = eventos.filter(data_criacao__date__range=(data_inicio, data_fim))
-            except (ValueError, TypeError):
-                data_inicio = data_fim = None
-        else:
-            data_inicio = data_fim = None
-
-        consolidado = defaultdict(lambda: {'garrafas': 0, 'doses': 0, 'ml': 0})
-        for evento in eventos:
-            for item in evento.produtos.all():
-                consolidado[item.produto.nome]['garrafas'] += item.garrafas
-                consolidado[item.produto.nome]['doses'] += item.doses
-                consolidado[item.produto.nome]['ml'] += item.doses * 50
-
-        consolidado = dict(consolidado)
+    if data_inicio_param and data_fim_param:
+        try:
+            data_inicio = datetime.strptime(data_inicio_param, "%Y-%m-%d").date()
+            data_fim = datetime.strptime(data_fim_param, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            data_inicio = date.today().replace(day=1)
+            data_fim = date.today()
     else:
-        data_inicio = data_fim = None
+        data_inicio = date.today().replace(day=1)
+        data_fim = date.today()
+
+    eventos_qs = (
+        Evento.objects
+        .filter(data_criacao__date__range=(data_inicio, data_fim))
+        .order_by('-data_criacao')
+    )
+    if nome_evento:
+        eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
+
+    # consolida por produto
+    consolidado = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
+
+    # estrutura por evento (com totais)
+    eventos = []  # cada item: {'obj': ev, 'data': dt, 'responsavel': ..., 'itens': [...], 'totais': {...}}
+
+    for ev in eventos_qs:
+        total_g, total_d, total_ml = 0, Decimal('0'), Decimal('0')
+        itens = []
+        for item in ev.produtos.all():
+            g = int(item.garrafas or 0)
+            d = Decimal(item.doses or 0)
+            ml = d * DOSE_ML
+
+            itens.append({
+                'produto': item.produto.nome,
+                'garrafas': g,
+                'doses': d,
+                'ml': ml,
+            })
+
+            # atualiza totais do evento
+            total_g += g
+            total_d += d
+            total_ml += ml
+
+            # atualiza consolidado
+            nome_prod = item.produto.nome
+            consolidado[nome_prod]['garrafas'] += g
+            consolidado[nome_prod]['doses'] += d
+            consolidado[nome_prod]['ml'] += ml
+
+        eventos.append({
+            'obj': ev,
+            'data': localtime(ev.data_criacao),
+            'responsavel': getattr(ev, 'responsavel', ''),  # ajuste se o campo tiver outro nome
+            'itens': itens,
+            'totais': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
+        })
+
+    consolidado = OrderedDict(sorted(consolidado.items(), key=lambda kv: kv[0].lower()))
 
     context = {
-        'eventos': eventos,
+        'eventos': eventos,                 # lista preparada acima
         'consolidado': consolidado,
-        'data_inicio': data_inicio_str,
-        'data_fim': data_fim_str,
+        'data_inicio': data_inicio,         # datas como date (p/ usar |date no template)
+        'data_fim': data_fim,
         'nome_evento': nome_evento,
     }
     return render(request, 'core/relatorios/relatorio_eventos.html', context)
 
 
 
+@login_required
+def relatorio_diferenca_contagens(request):
+    bar_id = request.session.get('bar_id')
+    if not bar_id:
+        return render(request, 'erro.html', {'mensagem': 'Nenhum bar selecionado.'})
+
+    bar_atual = get_object_or_404(Bar, id=bar_id)
+    restaurante = bar_atual.restaurante
+
+    # Todos os bares do restaurante (igual aos outros relatórios)
+    bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
+
+    # Estruturas de saída
+    dados_por_bar = {}  # { "Nome do Bar": [ {produto, ultimo, penultimo, diffs...}, ...] }
+    somatorio_total = defaultdict(lambda: {
+        'produto': None,
+        'diff_garrafas': Decimal('0'),
+        'diff_doses': Decimal('0'),
+    })
+
+    for bar in bares:
+        # Pega contagens do bar, mais novas primeiro
+        contagens = (
+            ContagemBar.objects
+            .filter(bar=bar)
+            .select_related('produto', 'usuario')
+            .order_by('-data_contagem')
+        )
+
+        # Para cada produto do bar, vamos guardar as DUAS mais recentes
+        # Estrutura: { produto_id: [ultima, penultima] }
+        duas_ultimas_por_produto = {}
+
+        for c in contagens:
+            pid = c.produto_id
+            if pid not in duas_ultimas_por_produto:
+                duas_ultimas_por_produto[pid] = [c]  # primeira (última)
+            elif len(duas_ultimas_por_produto[pid]) == 1:
+                duas_ultimas_por_produto[pid].append(c)  # segunda (penúltima)
+            # se já tem 2, ignora
+
+        linhas_bar = []
+
+        for pid, lista in duas_ultimas_por_produto.items():
+            ultimo = lista[0]
+            penultimo = lista[1] if len(lista) > 1 else None
+
+            # Converte doses para Decimal pra evitar bug de float
+            u_g = Decimal(ultimo.quantidade_garrafas_cheias or 0)
+            u_d = Decimal(ultimo.quantidade_doses_restantes or 0)
+
+            if penultimo:
+                p_g = Decimal(penultimo.quantidade_garrafas_cheias or 0)
+                p_d = Decimal(penultimo.quantidade_doses_restantes or 0)
+
+                diff_g = u_g - p_g
+                diff_d = u_d - p_d
+            else:
+                diff_g = None
+                diff_d = None
+
+            # Alimenta o somatório consolidado (só se tiver penúltima)
+            if diff_g is not None and diff_d is not None:
+                somatorio_total[pid]['produto'] = ultimo.produto
+                somatorio_total[pid]['diff_garrafas'] += diff_g
+                somatorio_total[pid]['diff_doses'] += diff_d
+
+            linhas_bar.append({
+                'produto': ultimo.produto,
+                'ultimo': ultimo,
+                'penultimo': penultimo,
+                'u_g': u_g, 'u_d': u_d,
+                'p_g': (p_g if penultimo else None),
+                'p_d': (p_d if penultimo else None),
+                'diff_g': diff_g,
+                'diff_d': diff_d,
+            })
+
+        # Ordena por nome do produto dentro do bar (fica mais amigável)
+        linhas_bar.sort(key=lambda x: x['produto'].nome.lower())
+
+        dados_por_bar[bar.nome] = linhas_bar
+
+    # Ordena somatório total por nome do produto
+    somatorio_total_dict = dict(sorted(
+        somatorio_total.items(),
+        key=lambda kv: kv[1]['produto'].nome.lower() if kv[1]['produto'] else ''
+    ))
+
+    context = {
+        'restaurante': restaurante,
+        'dados_por_bar': dados_por_bar,
+        'somatorio_total': somatorio_total_dict,
+    }
+    return render(request, 'core/relatorios/diferenca_contagens.html', context)
 
 
 
 #                                                                                     SEÇÃO DE EXPORTAÇÃO DE EXPORTAÇÃO EXCEL
 
 
+def _auto_fit(ws, min_w=10, max_w=45):
+    for col in ws.columns:
+        length = 0
+        idx = col[0].column
+        for cell in col:
+            s = '' if cell.value is None else str(cell.value)
+            length = max(length, len(s))
+        ws.column_dimensions[get_column_letter(idx)].width = max(min_w, min(max_w, length + 2))
+
+def _style_header(row, fill_color="F1F5FF"):
+    fill = PatternFill("solid", fgColor=fill_color)
+    border = Border(left=Side(style="thin", color="DDDDDD"),
+                    right=Side(style="thin", color="DDDDDD"),
+                    top=Side(style="thin", color="DDDDDD"),
+                    bottom=Side(style="thin", color="DDDDDD"))
+    for c in row:
+        c.font = Font(bold=True)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.fill = fill
+        c.border = border
+
+def _style_body_borders(ws, r1, r2, c1, c2):
+    """Borda fininha no corpo da tabela (inclusive totais)."""
+    border = Border(left=Side(style="thin", color="EEEEEE"),
+                    right=Side(style="thin", color="EEEEEE"),
+                    top=Side(style="thin", color="EEEEEE"),
+                    bottom=Side(style="thin", color="EEEEEE"))
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            ws.cell(row=r, column=c).border = border
+
 @login_required
 def exportar_relatorio_eventos_excel(request):
-    # Recupera parâmetros GET
-    data_inicio_str = request.GET.get('data_inicio')
-    data_fim_str = request.GET.get('data_fim')
-    nome_evento = request.GET.get('nome_evento', '').strip()
+    data_inicio_str = request.GET.get('data_inicio') or ""
+    data_fim_str = request.GET.get('data_fim') or ""
+    nome_evento = (request.GET.get('nome_evento') or "").strip()
 
-    # Tenta converter as datas, define defaults em caso de erro
-    try:
-        data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d").date()
-        data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d").date()
-    except (TypeError, ValueError):
-        today = date.today()
-        data_inicio = today.replace(day=1)
-        data_fim = today
+    # Período padrão (mês atual)
+    if data_inicio_str and data_fim_str:
+        try:
+            data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d").date()
+            data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            data_inicio = date.today().replace(day=1)
+            data_fim = date.today()
+    else:
+        data_inicio = date.today().replace(day=1)
+        data_fim = date.today()
 
-    # Filtra eventos por data
-    eventos = Evento.objects.filter(data_criacao__date__range=(data_inicio, data_fim))
-
-    # Aplica filtro por nome do evento se fornecido
+    eventos_qs = Evento.objects.filter(
+        data_criacao__date__range=(data_inicio, data_fim)
+    ).order_by('-data_criacao')
     if nome_evento:
-        eventos = eventos.filter(nome__icontains=nome_evento)
+        eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
 
-    # Consolidação dos dados
-    consolidado = defaultdict(lambda: {'garrafas': 0, 'doses': 0})
-    for evento in eventos:
-        for item in evento.produtos.all():
-            consolidado[item.produto.nome]['garrafas'] += item.garrafas
-            consolidado[item.produto.nome]['doses'] += item.doses
+    # Consolidação e detalhamento
+    consolidado = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
+    detalhado = []
+    eventos_group = []  # para a aba "Por Evento"
 
-    # Criação da planilha
+    for ev in eventos_qs:
+        total_g = 0
+        total_d = Decimal('0')
+        total_ml = Decimal('0')
+        itens_ev = []
+
+        for item in ev.produtos.all():
+            prod = item.produto.nome
+            gar = int(item.garrafas or 0)
+            dos = Decimal(item.doses or 0)
+            ml  = dos * DOSE_ML
+
+            # consolidado
+            consolidado[prod]['garrafas'] += gar
+            consolidado[prod]['doses'] += dos
+            consolidado[prod]['ml'] += ml
+
+            # detalhado geral
+            detalhado.append({
+                'evento': ev.nome,
+                'data': localtime(ev.data_criacao),
+                'produto': prod,
+                'garrafas': gar,
+                'doses': dos,
+                'ml': ml,
+            })
+
+            # por evento
+            itens_ev.append({'produto': prod, 'garrafas': gar, 'doses': dos, 'ml': ml})
+            total_g += gar
+            total_d += dos
+            total_ml += ml
+
+        eventos_group.append({
+            'nome': ev.nome,
+            'data': localtime(ev.data_criacao),
+            'responsavel': getattr(ev, 'responsavel', ''),
+            'itens': itens_ev,
+            'totais': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
+        })
+
+    # Workbook
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Eventos"
 
-    # Cabeçalho
-    ws.append(["Produto", "Garrafas", "Doses", "Doses (ml)"])
+    # === Aba 1: Consolidado ===
+    ws1 = wb.active
+    ws1.title = "Consolidado"
 
-    # Dados
-    for produto, dados in consolidado.items():
-        ml_total = dados['doses'] * 50  # 50ml fixos por dose
-        ws.append([produto, dados['garrafas'], dados['doses'], ml_total])
+    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    ws1.cell(row=1, column=1, value="Relatório de Eventos — Consolidado por Produto").font = Font(bold=True, size=14)
 
-    # Gera arquivo Excel em memória
+    filtro_txt = f"Período: {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
+    if nome_evento:
+        filtro_txt += f" | Evento contém: {nome_evento}"
+    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+    ws1.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
+
+    ws1.append([])
+    ws1.append(["Produto", "Garrafas", "Doses", "Doses (ML)"])
+    _style_header(ws1[4])
+
+    r = 5
+    tot_g, tot_d, tot_ml = 0, Decimal('0'), Decimal('0')
+    for prod in sorted(consolidado.keys(), key=lambda s: s.lower()):
+        d = consolidado[prod]
+        ws1.cell(row=r, column=1, value=prod)
+        ws1.cell(row=r, column=2, value=int(d['garrafas'])).number_format = "0"
+        ws1.cell(row=r, column=3, value=float(d['doses'])).number_format = "0.00"
+        ws1.cell(row=r, column=4, value=float(d['ml'])).number_format = "0.00"
+        tot_g += int(d['garrafas']); tot_d += d['doses']; tot_ml += d['ml']
+        r += 1
+
+    ws1.cell(row=r, column=1, value="Total").font = Font(bold=True)
+    ws1.cell(row=r, column=2, value=tot_g).number_format = "0"
+    ws1.cell(row=r, column=3, value=float(tot_d)).number_format = "0.00"
+    ws1.cell(row=r, column=4, value=float(tot_ml)).number_format = "0.00"
+
+    ws1.freeze_panes = "A5"
+    _style_body_borders(ws1, 5, r, 1, 4)
+    _auto_fit(ws1)
+
+    # === Aba 2: Detalhado ===
+    ws2 = wb.create_sheet("Detalhado")
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+    ws2.cell(row=1, column=1, value="Relatório de Eventos — Detalhado por Item").font = Font(bold=True, size=14)
+
+    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
+    ws2.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
+
+    ws2.append([])
+    ws2.append(["Evento", "Data", "Produto", "Garrafas", "Doses", "Doses (ML)"])
+    _style_header(ws2[4])
+
+    r2 = 5
+    for linha in detalhado:
+        ws2.cell(row=r2, column=1, value=linha['evento'])
+        ws2.cell(row=r2, column=2, value=linha['data'].strftime("%d/%m/%Y %H:%M"))
+        ws2.cell(row=r2, column=3, value=linha['produto'])
+        ws2.cell(row=r2, column=4, value=int(linha['garrafas'])).number_format = "0"
+        ws2.cell(row=r2, column=5, value=float(linha['doses'])).number_format = "0.00"
+        ws2.cell(row=r2, column=6, value=float(linha['ml'])).number_format = "0.00"
+        r2 += 1
+
+    ws2.freeze_panes = "A5"
+    _style_body_borders(ws2, 5, r2 - 1, 1, 6)
+    _auto_fit(ws2)
+
+    # === Aba 3: Por Evento ===
+    ws3 = wb.create_sheet("Por Evento")
+
+    col_count = 6  # vamos usar 6 colunas
+    current_row = 1
+
+    # título geral
+    ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
+    ws3.cell(row=current_row, column=1, value="Relatório de Eventos — Por Evento").font = Font(bold=True, size=14)
+    current_row += 1
+    ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
+    ws3.cell(row=current_row, column=1, value=filtro_txt).font = Font(italic=True, size=11)
+    current_row += 2  # linha em branco
+
+    # para cada evento, um bloco
+    for ev in eventos_group:
+        # Cabeçalho do bloco
+        ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
+        ws3.cell(row=current_row, column=1,
+                 value=f"Evento: {ev['nome']}  |  Data: {ev['data'].strftime('%d/%m/%Y %H:%M')}"
+                       + (f"  |  Resp.: {ev['responsavel']}" if ev['responsavel'] else "")
+                 ).font = Font(bold=True, size=12)
+        current_row += 1
+
+        # Cabeçalho da tabela do evento
+        ws3.append([])
+        current_row += 1
+        ws3.append(["Produto", "Garrafas", "Doses", "Doses (ML)", "", ""])
+        _style_header(ws3[current_row])
+        first_data = current_row + 1
+
+        # Linhas do evento
+        for it in ev['itens']:
+            current_row += 1
+            ws3.cell(row=current_row, column=1, value=it['produto'])
+            ws3.cell(row=current_row, column=2, value=int(it['garrafas'])).number_format = "0"
+            ws3.cell(row=current_row, column=3, value=float(it['doses'])).number_format = "0.00"
+            ws3.cell(row=current_row, column=4, value=float(it['ml'])).number_format = "0.00"
+
+        # Subtotal do evento
+        current_row += 1
+        ws3.cell(row=current_row, column=1, value="Subtotal do evento").font = Font(bold=True)
+        ws3.cell(row=current_row, column=2, value=int(ev['totais']['garrafas'])).number_format = "0"
+        ws3.cell(row=current_row, column=3, value=float(ev['totais']['doses'])).number_format = "0.00"
+        ws3.cell(row=current_row, column=4, value=float(ev['totais']['ml'])).number_format = "0.00"
+
+        # borda no bloco (tabela + subtotal)
+        _style_body_borders(ws3, first_data, current_row, 1, 4)
+
+        # Espaçamento entre eventos
+        current_row += 2
+
+    _auto_fit(ws3)
+
+    # Output
     output = BytesIO()
     wb.save(output)
     output.seek(0)
 
-    # Resposta HTTP com download do Excel
-    filename = f"relatorio_eventos_{data_inicio}_a_{data_fim}.xlsx"
-    response = HttpResponse(
+    fname = f"relatorio_eventos_{slugify(data_inicio)}_a_{slugify(data_fim)}.xlsx"
+    resp = HttpResponse(
         output.getvalue(),
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    return response
+    resp['Content-Disposition'] = f'attachment; filename="{fname}"'
+    return resp
 
 
 
@@ -1263,6 +1568,259 @@ def exportar_contagem_atual_excel(request):
 
     return response
 
+
+
+DOSE_ML = Decimal('50')
+
+def _auto_fit_columns(ws, min_width=10, max_width=45):
+    """Autoajusta a largura das colunas com limites razoáveis."""
+    for col_cells in ws.columns:
+        length = 0
+        for cell in col_cells:
+            v = cell.value
+            v = '' if v is None else str(v)
+            length = max(length, len(v))
+        col = get_column_letter(col_cells[0].column)
+        # um pouquinho de folga
+        ws.column_dimensions[col].width = max(min_width, min(max_width, length + 2))
+
+def _apply_header_style(row):
+    """Aplica estilo de cabeçalho (cor, bold, centralizado)."""
+    header_fill = PatternFill("solid", fgColor="E0E7FF")  # indigo-100
+    border = Border(left=Side(style="thin", color="CCCCCC"),
+                    right=Side(style="thin", color="CCCCCC"),
+                    top=Side(style="thin", color="CCCCCC"),
+                    bottom=Side(style="thin", color="CCCCCC"))
+    for c in row:
+        c.font = Font(bold=True)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.fill = header_fill
+        c.border = border
+
+def _apply_body_borders(ws, start_row, end_row, start_col, end_col):
+    """Borda fininha nas células do corpo da tabela."""
+    border = Border(left=Side(style="thin", color="EEEEEE"),
+                    right=Side(style="thin", color="EEEEEE"),
+                    top=Side(style="thin", color="EEEEEE"),
+                    bottom=Side(style="thin", color="EEEEEE"))
+    for r in range(start_row, end_row + 1):
+        for c in range(start_col, end_col + 1):
+            ws.cell(row=r, column=c).border = border
+
+@login_required
+def exportar_diferenca_contagens_excel(request):
+    bar_id = request.session.get('bar_id')
+    if not bar_id:
+        return HttpResponse("Nenhum bar selecionado.", status=400)
+
+    bar_atual = get_object_or_404(Bar, id=bar_id)
+    restaurante = bar_atual.restaurante
+    bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
+
+    # ===== Reaproveita a lógica do relatório para montar os dados =====
+    dados_por_bar = {}
+    somatorio_total = defaultdict(lambda: {
+        'produto': None,
+        'diff_garrafas': Decimal('0'),
+        'diff_doses': Decimal('0'),
+    })
+
+    for bar in bares:
+        contagens = (
+            ContagemBar.objects
+            .filter(bar=bar)
+            .select_related('produto', 'usuario')
+            .order_by('-data_contagem')
+        )
+
+        duas_ultimas_por_produto = {}
+        for c in contagens:
+            pid = c.produto_id
+            if pid not in duas_ultimas_por_produto:
+                duas_ultimas_por_produto[pid] = [c]
+            elif len(duas_ultimas_por_produto[pid]) == 1:
+                duas_ultimas_por_produto[pid].append(c)
+
+        linhas_bar = []
+        for pid, lista in duas_ultimas_por_produto.items():
+            ultimo = lista[0]
+            penultimo = lista[1] if len(lista) > 1 else None
+
+            u_g = Decimal(ultimo.quantidade_garrafas_cheias or 0)
+            u_d = Decimal(ultimo.quantidade_doses_restantes or 0)
+
+            if penultimo:
+                p_g = Decimal(penultimo.quantidade_garrafas_cheias or 0)
+                p_d = Decimal(penultimo.quantidade_doses_restantes or 0)
+                diff_g = u_g - p_g
+                diff_d = u_d - p_d
+            else:
+                p_g = None
+                p_d = None
+                diff_g = None
+                diff_d = None
+
+            if diff_g is not None and diff_d is not None:
+                somatorio_total[pid]['produto'] = ultimo.produto
+                somatorio_total[pid]['diff_garrafas'] += diff_g
+                somatorio_total[pid]['diff_doses'] += diff_d
+
+            linhas_bar.append({
+                'bar': bar.nome,
+                'produto': ultimo.produto,
+                'u_g': u_g, 'u_d': u_d,
+                'p_g': p_g, 'p_d': p_d,
+                'diff_g': diff_g, 'diff_d': diff_d,
+                'data_p': (penultimo.data_contagem if penultimo else None),
+                'user_p': (penultimo.usuario.username if penultimo else None),
+                'data_u': ultimo.data_contagem,
+                'user_u': ultimo.usuario.username,
+            })
+
+        linhas_bar.sort(key=lambda x: x['produto'].nome.lower())
+        dados_por_bar[bar.nome] = linhas_bar
+
+    somatorio_total = dict(sorted(
+        somatorio_total.items(),
+        key=lambda kv: kv[1]['produto'].nome.lower() if kv[1]['produto'] else ''
+    ))
+
+    # ===== Monta o Excel =====
+    wb = Workbook()
+
+    # Metadados / primeira sheet: Consolidado
+    ws1 = wb.active
+    ws1.title = "Consolidado"
+
+    # Título e info
+    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    titulo = ws1.cell(row=1, column=1, value=f"Diferenças (Última − Penúltima) — {restaurante.nome}")
+    titulo.font = Font(bold=True, size=14)
+    titulo.alignment = Alignment(horizontal="left", vertical="center")
+
+    now = timezone.localtime(timezone.now())
+    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+    info = ws1.cell(row=2, column=1, value=f"Gerado em {now.strftime('%d/%m/%Y %H:%M')}")
+    info.font = Font(italic=True, size=11)
+
+    # Cabeçalho
+    headers1 = ["Produto", "Garrafas", "Doses", "Doses (ML)"]
+    ws1.append([])
+    ws1.append(headers1)
+    _apply_header_style(ws1[4])
+
+    # Linhas do consolidado
+    first_data_row = 5
+    r = first_data_row
+    for item in somatorio_total.values():
+        prod = item['produto'].nome if item['produto'] else ""
+        diff_g = item['diff_garrafas']
+        diff_d = item['diff_doses']
+        diff_ml = (diff_d * DOSE_ML) if diff_d is not None else None
+
+        ws1.cell(row=r, column=1, value=prod)
+        c2 = ws1.cell(row=r, column=2, value=float(diff_g) if diff_g is not None else None)
+        c3 = ws1.cell(row=r, column=3, value=float(diff_d) if diff_d is not None else None)
+        c4 = ws1.cell(row=r, column=4, value=float(diff_ml) if diff_ml is not None else None)
+
+        c2.number_format = "0"
+        c3.number_format = "0.00"
+        c4.number_format = "0.00"
+        r += 1
+
+    if r > first_data_row:
+        _apply_body_borders(ws1, first_data_row, r - 1, 1, 4)
+        ws1.freeze_panes = "A5"
+
+        # Escala de cores (vermelho → branco → verde) nas diferenças
+        for col in [2, 3, 4]:
+            col_letter = get_column_letter(col)
+            ws1.conditional_formatting.add(
+                f"{col_letter}{first_data_row}:{col_letter}{r-1}",
+                ColorScaleRule(start_type='num', start_value=-1, start_color='FCA5A5',  # red-300
+                               mid_type='num', mid_value=0, mid_color='FFFFFF',
+                               end_type='num', end_value=1, end_color='86EFAC')   # green-300
+            )
+
+    _auto_fit_columns(ws1)
+
+    # Segunda sheet: Detalhado por bar
+    ws2 = wb.create_sheet(title="Detalhado")
+    ws2.append([f"Diferenças por Produto (Penúltima → Última) — {restaurante.nome}"])
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
+    ws2.cell(row=1, column=1).font = Font(bold=True, size=14)
+
+    ws2.append([f"Gerado em {now.strftime('%d/%m/%Y %H:%M')}"])
+    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=12)
+    ws2.cell(row=2, column=1).font = Font(italic=True, size=11)
+
+    headers2 = [
+        "Bar", "Produto",
+        "Penúltima (Garrafas)", "Penúltima (Doses)",
+        "Última (Garrafas)", "Última (Doses)",
+        "Diferença (Garrafas)", "Diferença (Doses)", "Diferença (Doses ML)",
+        "Data Penúltima", "Usuário Penúltima",
+        "Data Última", "Usuário Última",
+    ]
+    ws2.append([])
+    ws2.append(headers2)
+    _apply_header_style(ws2[4])
+
+    first_data_row2 = 5
+    r2 = first_data_row2
+    for bar_nome, linhas in dados_por_bar.items():
+        for linha in linhas:
+            diff_ml = (linha['diff_d'] * DOSE_ML) if linha['diff_d'] is not None else None
+            ws2.cell(row=r2, column=1, value=bar_nome)
+            ws2.cell(row=r2, column=2, value=linha['produto'].nome)
+
+            c_pg = ws2.cell(row=r2, column=3, value=float(linha['p_g']) if linha['p_g'] is not None else None)
+            c_pd = ws2.cell(row=r2, column=4, value=float(linha['p_d']) if linha['p_d'] is not None else None)
+            c_ug = ws2.cell(row=r2, column=5, value=float(linha['u_g']))
+            c_ud = ws2.cell(row=r2, column=6, value=float(linha['u_d']))
+            c_dg = ws2.cell(row=r2, column=7, value=float(linha['diff_g']) if linha['diff_g'] is not None else None)
+            c_dd = ws2.cell(row=r2, column=8, value=float(linha['diff_d']) if linha['diff_d'] is not None else None)
+            c_ml = ws2.cell(row=r2, column=9, value=float(diff_ml) if diff_ml is not None else None)
+
+            for c in (c_pg, c_ug, c_dg):
+                if c is not None:
+                    c.number_format = "0"
+            for c in (c_pd, c_ud, c_dd, c_ml):
+                if c is not None:
+                    c.number_format = "0.00"
+
+            ws2.cell(row=r2, column=10, value=linha['data_p'].strftime('%d/%m/%Y %H:%M') if linha['data_p'] else None)
+            ws2.cell(row=r2, column=11, value=linha['user_p'] if linha['user_p'] else None)
+            ws2.cell(row=r2, column=12, value=linha['data_u'].strftime('%d/%m/%Y %H:%M'))
+            ws2.cell(row=r2, column=13, value=linha['user_u'])
+
+            r2 += 1
+
+    if r2 > first_data_row2:
+        _apply_body_borders(ws2, first_data_row2, r2 - 1, 1, 13)
+        ws2.freeze_panes = "A5"
+
+        # Escala de cores para as 3 colunas de diferença (garrafas, doses, ml)
+        for col in [7, 8, 9]:
+            col_letter = get_column_letter(col)
+            ws2.conditional_formatting.add(
+                f"{col_letter}{first_data_row2}:{col_letter}{r2-1}",
+                ColorScaleRule(start_type='num', start_value=-1, start_color='FCA5A5',
+                               mid_type='num', mid_value=0, mid_color='FFFFFF',
+                               end_type='num', end_value=1, end_color='86EFAC')
+            )
+
+    _auto_fit_columns(ws2)
+
+    # ===== Resposta HTTP =====
+    from django.utils.text import slugify
+    filename = f"dif-contagens-{slugify(restaurante.nome)}-{now.strftime('%Y%m%d-%H%M')}.xlsx"
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    wb.save(response)
+    return response
 
 
 

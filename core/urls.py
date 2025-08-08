@@ -29,5 +29,7 @@ urlpatterns = [
     path('relatorios/consolidado-diferenca/excel/', views.relatorio_consolidado_excel_view, name='relatorio_consolidado_excel'),
     path('relatorios/contagem-atual/', views.relatorio_contagem_atual, name='relatorio_contagem_atual'),
     path('relatorios/contagem-atual/excel/', views.exportar_contagem_atual_excel, name='exportar_contagem_atual_excel'),
+    path('relatorios/diferenca-contagens/', views.relatorio_diferenca_contagens, name='relatorio_diferenca_contagens'),
+    path('relatorios/diferenca-contagens/exportar-excel/', views.exportar_diferenca_contagens_excel, name='exportar_diferenca_contagens_excel'),
     path('dashboard/', views.dashboard, name='dashboard'),
 ]

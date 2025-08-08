@@ -11,6 +11,7 @@
                     <h5 class="card-title">📦 Saídas de Estoque para os Bares</h5>
                     <p class="card-text">Visualize tudo que saiu do estoque central para os bares, incluindo pedidos aprovados e rejeitados.</p>
                     <a href="{% url 'relatorio_saida_estoque' %}" class="btn btn-primary">Acessar Relatório</a>
+                    <a href="{% url 'exportar_saida_estoque_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -21,6 +22,7 @@
                     <h5 class="card-title">📊 Contagem Final x Saída x Diferença</h5>
                     <p class="card-text">Compare o que foi solicitado, o que foi contado no final do dia e veja discrepâncias.</p>
                     <a href="{% url 'relatorio-consolidado' %}" class="btn btn-success">Acessar Relatório</a>
+                    <a href="{% url 'relatorio_consolidado_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -31,6 +33,7 @@
                     <h5 class="card-title">🔁 Contagem Atual</h5>
                     <p class="card-text">Veja a contagem mais recente de cada produto em todos os bares.</p>
                     <a href="{% url 'relatorio_contagem_atual' %}" class="btn btn-info text-white">Acessar Relatório</a>
+                    <a href="{% url 'exportar_contagem_atual_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -41,10 +44,24 @@
                     <h5 class="card-title">📋 Relatório de Eventos</h5>
                     <p class="card-text">Acompanhe os produtos utilizados nos eventos especiais da casa.</p>
                     <a href="{% url 'relatorio_eventos' %}" class="btn btn-warning text-dark">Acessar Relatório</a>
+                    <a href="{% url 'exportar_relatorio_eventos_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Novo relatório: Diferença Penúltima x Última Contagem -->
+        <div class="col">
+            <div class="card h-100 border-danger shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">📉 Diferença Penúltima x Última Contagem</h5>
+                    <p class="card-text">
+                        Compare as duas últimas contagens de cada produto e identifique aumentos ou reduções.
+                    </p>
+                    <a href="{% url 'relatorio_diferenca_contagens' %}" class="btn btn-danger">Acessar Relatório</a>
+                    <a href="{% url 'exportar_diferenca_contagens_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
     </div>
 </div>
 {% endblock %}
-
