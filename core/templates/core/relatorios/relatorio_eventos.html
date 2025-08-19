@@ -5,6 +5,11 @@
 {% block content %}
 <div class="container mt-4">
   <h2 class="mb-4">📅 Relatório de Eventos</h2>
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-success" role="alert">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
 
   <!-- Filtros -->
   <form method="get" class="row g-3 mb-4">
@@ -23,13 +28,19 @@
     <div class="col-md-2 d-flex align-items-end">
       <button type="submit" class="btn btn-primary w-100">🔎 Filtrar</button>
     </div>
+    <div class="col-12">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="pendentes" name="pendentes" value="1" {% if somente_nao_baixados %}checked{% endif %}>
+        <label class="form-check-label" for="pendentes">Somente não baixados (apenas FINALIZADOS)</label>
+      </div>
+    </div>
   </form>
 
   {% if eventos %}
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h5 class="mb-0">📦 Consolidado do Período</h5>
       <a
-        href="{% url 'exportar_relatorio_eventos_excel' %}?data_inicio={{ data_inicio|date:'Y-m-d' }}&data_fim={{ data_fim|date:'Y-m-d' }}&nome_evento={{ nome_evento|urlencode }}"
+        href="{% url 'exportar_relatorio_eventos_excel' %}?data_inicio={{ data_inicio|date:'Y-m-d' }}&data_fim={{ data_fim|date:'Y-m-d' }}&nome_evento={{ nome_evento|urlencode }}&pendentes={{ somente_nao_baixados }}"
         class="btn btn-success"
       >📥 Exportar Relatório para Excel</a>
     </div>
@@ -64,20 +75,76 @@
     <h5 class="mb-3">📋 Eventos no Período</h5>
 
     {% for e in eventos %}
+      {% with ev=e.obj %}
       <div class="card mb-3 shadow-sm">
+
+        <!-- Cabeçalho -->
         <div class="card-header d-flex justify-content-between align-items-center">
-          <div>
-            <strong>{{ e.obj.nome }}</strong>
-            — {{ e.data|date:"d/m/Y H:i" }}
-            {% if e.responsavel %} por {{ e.responsavel }}{% endif %}
+          <div class="d-flex flex-column flex-md-row gap-2 align-items-start align-items-md-center">
+            <div>
+              <strong>{{ ev.nome }}</strong>
+              — {{ e.data|date:"d/m/Y H:i" }}
+              {% if e.responsavel %} por {{ e.responsavel }}{% endif %}
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              {% if ev.status == "FINALIZADO" %}
+                <span class="badge bg-success">Finalizado</span>
+              {% else %}
+                <span class="badge bg-secondary">Aberto</span>
+              {% endif %}
+              {% if ev.baixado_estoque %}
+                <span class="badge bg-dark">Baixado</span>
+                <small class="text-muted">
+                  por {{ ev.baixado_por|default:"-" }}
+                  em {{ ev.baixado_em|date:"d/m H:i" }}
+                  {% if ev.baixado_obs %} • {{ ev.baixado_obs }}{% endif %}
+                </small>
+              {% else %}
+                <span class="badge bg-warning text-dark">Pendente de baixa</span>
+              {% endif %}
+            </div>
           </div>
-          <div class="d-flex gap-2">
+
+          <div class="d-flex gap-2 align-items-center">
             <span class="badge bg-secondary">Garrafas: {{ e.totais.garrafas|intcomma }}</span>
             <span class="badge bg-secondary">Doses: {{ e.totais.doses|floatformat:2 }}</span>
             <span class="badge bg-secondary">ML: {{ e.totais.ml|floatformat:0 }}</span>
           </div>
         </div>
 
+        <!-- 🔹 Linha de ação (observação + botão) logo abaixo do cabeçalho -->
+        {% if ev.status == "FINALIZADO" %}
+          <div class="px-3 py-2 border-bottom">
+            {% if not ev.baixado_estoque %}
+              <form method="post" action="{% url 'marcar_evento_baixado' ev.id %}" class="row g-2">
+                {% csrf_token %}
+                <div class="col-md-6">
+                  <input type="text" name="obs" class="form-control" placeholder="Obs. (opcional)">
+                </div>
+                <div class="col-md-4 col-lg-3">
+                  <button class="btn btn-outline-success w-100" onclick="return confirm('Confirmar marca de baixa deste evento?')">
+                    ✔️ Marcar como baixado
+                  </button>
+                </div>
+              </form>
+            {% else %}
+              <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div class="text-muted small">
+                  Baixado por {{ ev.baixado_por|default:"-" }} em {{ ev.baixado_em|date:"d/m H:i" }}
+                  {% if ev.baixado_obs %} • {{ ev.baixado_obs }}{% endif %}
+                </div>
+                <form method="post" action="{% url 'desmarcar_evento_baixado' ev.id %}">
+                  {% csrf_token %}
+                  <button class="btn btn-outline-secondary btn-sm" onclick="return confirm('Remover a marca de baixa?')">
+                    ↩️ Desfazer baixa
+                  </button>
+                </form>
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <!-- Tabela do evento -->
         <div class="table-responsive">
           <table class="table table-sm mb-0">
             <thead class="table-light">
@@ -109,6 +176,7 @@
           </table>
         </div>
       </div>
+      {% endwith %}
     {% endfor %}
   {% else %}
     <p class="text-muted">Nenhum evento encontrado no período selecionado.</p>

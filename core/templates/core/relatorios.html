@@ -49,7 +49,7 @@
             </div>
         </div>
 
-        <!-- Novo relatório: Diferença Penúltima x Última Contagem -->
+        <!-- Diferença Penúltima x Última Contagem -->
         <div class="col">
             <div class="card h-100 border-danger shadow-sm">
                 <div class="card-body">
@@ -59,6 +59,19 @@
                     </p>
                     <a href="{% url 'relatorio_diferenca_contagens' %}" class="btn btn-danger">Acessar Relatório</a>
                     <a href="{% url 'exportar_diferenca_contagens_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- NOVO: Relatório de Perdas -->
+        <div class="col">
+            <div class="card h-100 border-dark shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">📉 Relatório de Perdas</h5>
+                    <p class="card-text">Analise perdas por bar, período, produto (nome/código) e motivo. Inclui consolidados e detalhamento.</p>
+                    <a href="{% url 'relatorio_perdas' %}" class="btn btn-dark">Acessar Relatório</a>
+                    <a href="{% url 'exportar_relatorio_perdas_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                    
                 </div>
             </div>
         </div>

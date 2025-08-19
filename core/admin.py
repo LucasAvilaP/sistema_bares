@@ -2,10 +2,13 @@ from django.contrib import admin
 from .models import (
     Restaurante, Bar, Produto, RecebimentoEstoque,
     TransferenciaBar, ContagemBar, RequisicaoProduto,
-    EstoqueBar, AcessoUsuarioBar, Evento, EventoProduto, PermissaoPagina
+    EstoqueBar, AcessoUsuarioBar, Evento, EventoProduto, PermissaoPagina, Alimento, EventoAlimento, PerdaProduto
 )
 from django.contrib.auth.models import User
 from django.contrib.auth.admin import UserAdmin
+
+admin.site.register(Alimento)
+admin.site.register(EventoAlimento)
 
 # Inline para associar bares ao usuário
 class AcessoUsuarioBarInline(admin.StackedInline):
@@ -106,3 +109,11 @@ class CustomUserAdmin(UserAdmin):
 
 # Registre novamente o User com os dois inlines
 admin.site.register(User, CustomUserAdmin)
+
+
+
+@admin.register(PerdaProduto)
+class PerdaProdutoAdmin(admin.ModelAdmin):
+    list_display = ('data_registro','bar','produto','garrafas','doses','motivo','usuario')
+    list_filter = ('bar','motivo','data_registro')
+    search_fields = ('produto__nome','produto__codigo','bar__nome','usuario__username')

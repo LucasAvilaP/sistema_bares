@@ -1,127 +1,123 @@
 {% extends 'base.html' %}
-
 {% block content %}
 <div class="container mt-4">
-    <h2 class="mb-4">🍾 Contagem Final do Bar</h2>
+  <h2 class="mb-4">🍾 Contagem Final do Bar — {{ bar.nome }}</h2>
 
-    {% if messages %}
-        {% for message in messages %}
-            <div class="alert alert-success" role="alert">
-                {{ message }}
-            </div>
-        {% endfor %}
-    {% endif %}
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-success" role="alert">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
 
-    <form method="POST">
-        {% csrf_token %}
-        <div class="row mb-3">
-            <div class="col-md-5">
-                <label for="produto" class="form-label">Produto</label>
-                <select id="produto" class="form-select select2">
-                    <option value="">Selecione</option>
-                    {% for p in produtos %}
-                        <option value="{{ p.id }}">{{ p.nome }}</option>
-                    {% endfor %}
-                </select>
-            </div>
+  <form method="POST" id="form-contagem">
+    {% csrf_token %}
 
-            <div class="col-md-3">
-                <label for="garrafas" class="form-label">Garrafas Cheias</label>
-                <input type="number" id="garrafas" step="1" min="0" class="form-control" placeholder="Ex: 5">
-            </div>
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table align-middle mb-0">
+            <thead class="table-light sticky-top">
+              <tr>
+                <th class="text-start">Produto</th>
+                <th class="text-center" style="width: 220px;">Qtd Garrafas</th>
+                <th class="text-center" style="width: 220px;">Qtd Doses</th>
+                <th class="text-center" style="width: 120px;">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for linha in linhas %}
+                {% with p=linha.produto %}
+                <tr>
+                  <td class="fw-semibold">{{ p.nome }}</td>
 
-            <div class="col-md-3">
-                <label for="doses" class="form-label">Doses Restantes</label>
-                <input type="number" id="doses" step="0.1" min="0" class="form-control" placeholder="Ex: 2.5">
-            </div>
+                  <td>
+                    <div class="d-flex gap-2 justify-content-center">
+                      <input
+                        type="number" min="0" step="1"
+                        name="garrafas_{{ p.id }}"
+                        class="form-control text-center"
+                        inputmode="numeric"
+                      >
+                      <button type="button" class="btn btn-outline-secondary px-2 incr" data-target="garrafas_{{ p.id }}">+1</button>
+                    </div>
+                    <div class="form-text text-center">Última: {{ linha.g_prev }}</div>
+                  </td>
 
-            <div class="col-md-1 d-flex align-items-end">
-                <button type="button" class="btn btn-success w-100" onclick="adicionarItem()">➕</button>
-            </div>
+                  <td>
+                    <div class="d-flex gap-2 justify-content-center">
+                      <input
+                        type="number" min="0" step="0.1"
+                        name="doses_{{ p.id }}"
+                        class="form-control text-center"
+                        
+                        inputmode="decimal"
+                      >
+                      <button type="button" class="btn btn-outline-secondary px-2 incr" data-target="doses_{{ p.id }}">+1</button>
+                    </div>
+                    <div class="form-text text-center">Última: {{ linha.d_prev }}</div>
+                  </td>
+
+                  <td class="text-center">
+                    <button type="button" class="btn btn-sm btn-outline-danger limpar" data-g="garrafas_{{ p.id }}" data-d="doses_{{ p.id }}">
+                      Limpar
+                    </button>
+                  </td>
+                </tr>
+                {% endwith %}
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
+      </div>
+    </div>
 
-        <hr>
-
-        <div id="lista"></div>
-
-        <hr>
-        <div class="d-flex justify-content-end">
-            <button type="submit" class="btn btn-primary">
-                ✅ Enviar Contagem
-            </button>
-        </div>
-    </form>
+    <div class="d-flex justify-content-end gap-2 mt-3">
+      <button type="reset" class="btn btn-outline-secondary">Limpar tudo</button>
+      <button type="submit" class="btn btn-primary px-4">✅ Enviar Contagem</button>
+    </div>
+  </form>
 </div>
 
-<!-- jQuery e Select2 (coloque no final para melhor performance) -->
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
-<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <style>
-  /* Faz o Select2 ter a mesma altura dos outros campos de formulário do Bootstrap */
-  .select2-container .select2-selection--single {
-      height: calc(2.375rem + 2px); /* mesma altura do .form-control padrão */
-      padding: 0.375rem 0.75rem;
-      font-size: 1rem;
-      line-height: 1.5;
-      border-radius: 0.375rem;
-      display: flex;
-      align-items: center;
-  }
-
-  /* Remove espaçamento vertical extra interno */
-  .select2-selection__rendered {
-      line-height: 1.5 !important;
-  }
-
-  .select2-selection__arrow {
-      height: 100% !important;
-  }
+  .table td, .table th { vertical-align: middle; }
+  .sticky-top { position: sticky; top: 0; z-index: 1; }
+  .form-text { font-size: .8rem; }
 </style>
 
-
 <script>
-    // Ativar Select2 no campo de produto
-    $(document).ready(function () {
-        $('#produto').select2({
-            placeholder: 'Selecione um produto',
-            allowClear: true,
-            width: '100%'  // Garantir que fique do tamanho do form-control
-        });
+  // Botão +1 em cada campo
+  document.querySelectorAll('.incr').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.getAttribute('data-target');
+      const input = document.querySelector(`input[name="${name}"]`);
+      if (!input) return;
+      const step = parseFloat(input.getAttribute('step') || '1');
+      const val = parseFloat(input.value || '0');
+      input.value = (val + step).toFixed(step % 1 === 0 ? 0 : 1);
+      input.dispatchEvent(new Event('change'));
     });
+  });
 
-    // Função para adicionar item à lista
-    function adicionarItem() {
-        const select = document.getElementById("produto");
-        const produtoId = select.value;
-        const produtoNome = select.options[select.selectedIndex].text;
-        const garrafas = document.getElementById("garrafas").value;
-        const doses = document.getElementById("doses").value;
+  // Botão limpar da linha
+  document.querySelectorAll('.limpar').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const g = btn.getAttribute('data-g');
+      const d = btn.getAttribute('data-d');
+      const ig = document.querySelector(`input[name="${g}"]`);
+      const id = document.querySelector(`input[name="${d}"]`);
+      if (ig) ig.value = '';
+      if (id) id.value = '';
+    });
+  });
 
-        if (!produtoId || (garrafas === "" && doses === "")) {
-            alert("Preencha as quantidades corretamente.");
-            return;
-        }
-
-        const lista = document.getElementById("lista");
-        const item = document.createElement("div");
-        item.classList.add("alert", "alert-secondary", "d-flex", "justify-content-between", "align-items-center", "mb-2");
-
-        item.innerHTML = `
-            <div>
-                <strong>${produtoNome}</strong> — ${garrafas} garrafas, ${doses} doses
-                <input type="hidden" name="produto[]" value="${produtoId}">
-                <input type="hidden" name="garrafas[]" value="${garrafas}">
-                <input type="hidden" name="doses[]" value="${doses}">
-            </div>
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.parentElement.remove()">Remover</button>
-        `;
-
-        lista.appendChild(item);
-
-        document.getElementById("garrafas").value = "";
-        document.getElementById("doses").value = "";
-        $('#produto').val(null).trigger('change');  // Limpa o select2
+  // Ajuda: se tudo estiver vazio, evita POST acidental
+  document.getElementById('form-contagem').addEventListener('submit', (e) => {
+    const anyFilled = Array.from(document.querySelectorAll('input[type="number"]'))
+      .some(i => i.value !== '');
+    if (!anyFilled) {
+      e.preventDefault();
+      alert('Preencha ao menos uma quantidade antes de enviar.');
     }
+  });
 </script>
 {% endblock %}

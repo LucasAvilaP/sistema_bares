@@ -1,178 +1,445 @@
+{# templates/eventos/pagina_eventos.html #}
 {% extends 'base.html' %}
 {% load static %}
 
 {% block content %}
 <div class="container">
-    <h2 class="mb-4">📋 Registro de Consumo de Eventos</h2>
+  <h2 class="mb-4">📋 Registro de Consumo de Eventos</h2>
 
-    <!-- FORMULÁRIO DO NOVO EVENTO -->
-    <form method="post" action="{% url 'salvar_evento' %}" id="evento-form">
-        {% csrf_token %}
-        <div class="mb-3">
-            <label for="nome_evento" class="form-label">Nome do Evento:</label>
-            <input type="text" class="form-control" name="nome_evento" required>
-        </div>
-
-        <div class="row align-items-end mb-3">
-            <div class="col-md-4">
-                <label class="form-label">Produto</label>
-                <select class="form-select select2" id="produto-select">
-                    <option value="">Selecione</option>
-                    {% for produto in produtos %}
-                        <option value="{{ produto.id }}">{{ produto.nome }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Garrafas</label>
-                <input type="number" class="form-control" id="garrafas" min="0" value="0">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Doses</label>
-                <input type="number" class="form-control" id="doses" min="0" value="0">
-            </div>
-            <div class="col-md-2 text-end">
-                <button type="button" class="btn btn-success w-100" onclick="adicionarProduto()">➕ Adicionar</button>
-            </div>
-        </div>
-
-        <hr>
-
-        <!-- LISTA TEMPORÁRIA DOS PRODUTOS -->
-        <div id="lista-produtos" class="mb-3"></div>
-
-        <div class="d-flex justify-content-end">
-            <button type="submit" class="btn btn-primary">✅ Concluir Evento</button>
-        </div>
-    </form>
-
-    <hr class="my-5">
-
-    <!-- EXPORTAÇÃO -->
-    <a href="{% url 'exportar_consolidado_eventos_excel' %}" class="btn btn-outline-success mb-3">
-        📤 Exportar Consolidado para Excel
-    </a>
-
-    <!-- CONSOLIDADO DO DIA -->
-    <h4 class="mb-3">📦 Consolidado do Dia (Todos os Eventos)</h4>
-    <table class="table table-bordered bg-white">
-        <thead class="table-light">
-            <tr>
-                <th>Produto</th>
-                <th>Garrafas</th>
-                <th>Doses</th>
-                <th>Doses (ml)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for produto, dados in consolidado.items %}
-            <tr>
-                <td>{{ produto }}</td>
-                <td>{{ dados.garrafas }}</td>
-                <td>{{ dados.doses }}</td>
-                <td>{{ dados.ml }} ml</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-
-    <hr class="my-5">
-
-    <!-- LISTA DE EVENTOS REGISTRADOS -->
-    <h4 class="mb-3">📅 Eventos de Hoje</h4>
-    {% for evento in eventos %}
-        <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <div>
-                    <strong>{{ evento.nome }}</strong> — {{ evento.data_criacao|date:"H:i" }} por {{ evento.responsavel }}
-                </div>
-                <form method="post" action="{% url 'excluir_evento' evento.id %}" onsubmit="return confirm('Tem certeza que deseja excluir este evento?');">
-                    {% csrf_token %}
-                    <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
-                </form>
-            </div>
-            <ul class="list-group list-group-flush">
-                {% for item in evento.produtos.all %}
-                    <li class="list-group-item">
-                        {{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses
-                    </li>
-                {% endfor %}
-            </ul>
-        </div>
-    {% empty %}
-        <p>Nenhum evento registrado hoje.</p>
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-success" role="alert">{{ message }}</div>
     {% endfor %}
+  {% endif %}
+
+  <!-- FORMULÁRIO: CADASTRAR EVENTO (não finaliza) -->
+  <form method="post" action="{% url 'criar_evento' %}" id="evento-form">
+    {% csrf_token %}
+    <div class="mb-3">
+      <label class="form-label">Nome do Evento:</label>
+      <input type="text" class="form-control" name="nome_evento" required>
+    </div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label">Nº de pessoas</label>
+        <input type="number" name="numero_pessoas" class="form-control" min="1" step="1" placeholder="ex.: 80">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Horas</label>
+        <input type="number" name="horas" class="form-control" min="0.5" step="0.5" placeholder="ex.: 4 ou 3,5">
+        <div class="form-text">Aceita frações (ex.: 3,5h).</div>
+      </div>
+    </div>
+
+    <!-- ====================== BEBIDAS ====================== -->
+    <div class="row g-3 align-items-end mb-3">
+      <div class="col-md-4">
+        <label class="form-label">Bebida</label>
+        <select class="form-select select2" id="produto-select">
+          <option value="">Selecione</option>
+          {% for produto in produtos %}
+            <option value="{{ produto.id }}"
+                    data-codigo="{{ produto.codigo|default_if_none:'' }}">
+              {{ produto.nome }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Garrafas</label>
+        <input type="number" class="form-control" id="garrafas" min="0" value="0">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Doses</label>
+        <input type="number" class="form-control" id="doses" min="0" value="0">
+      </div>
+      <div class="col-md-2">
+        <!-- placeholder para igualar a altura do label acima -->
+        <label class="form-label d-none d-md-block">&nbsp;</label>
+        <button type="button" class="btn btn-success w-100" onclick="adicionarProduto()">➕ Adicionar</button>
+      </div>
+    </div>
+
+
+    <!-- LISTA TEMPORÁRIA BEBIDAS -->
+    <div id="lista-produtos" class="mb-4"></div>
+
+    <hr>
+
+    <!-- ====================== ALIMENTOS ====================== -->
+<div class="row g-3 align-items-end mb-3">
+  <div class="col-md-6">
+    <label class="form-label">Alimento</label>
+    <select class="form-select select2-code" id="alimento-select" title="Pesquise por nome ou código">
+      <option value="">Selecione</option>
+      {% for a in alimentos %}
+        <option value="{{ a.id }}" data-codigo="{{ a.codigo }}" data-unidade="{{ a.get_unidade_display }}">
+          {{ a.nome }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="col-md-4">
+    <label class="form-label">Quantidade</label>
+    <input type="number" class="form-control" id="alimento-qtd" min="0" step="0.01" value="0" placeholder="ex.: 2,50">
+    <!-- mantém um espaço de ajuda para igualar alturas -->
+    <div class="form-text equalize-hint" id="hint-unidade" style="display:none;"></div>
+  </div>
+
+  <div class="col-md-2">
+    <!-- placeholder de ajuda para alinhar com as outras colunas -->
+    <div class="form-text equalize-hint d-none d-md-block">&nbsp;</div>
+    <button type="button" class="btn btn-success w-100" onclick="adicionarAlimento()">➕ Adicionar</button>
+  </div>
 </div>
 
-<!-- Select2 + Estilo padronizado -->
+
+
+    <!-- LISTA TEMPORÁRIA ALIMENTOS -->
+    <div id="lista-alimentos" class="mb-3"></div>
+
+    <div class="d-flex justify-content-end">
+      <button type="submit" class="btn btn-primary">📝 Cadastrar Evento</button>
+    </div>
+  </form>
+
+  <hr class="my-5">
+
+  <!-- EXPORTAÇÃO -->
+  <a href="{% url 'exportar_consolidado_eventos_excel' %}" class="btn btn-outline-success mb-3">
+    📤 Exportar Consolidado para Excel
+  </a>
+
+  <!-- CONSOLIDADO DO DIA - BEBIDAS (somente FINALIZADOS de hoje) -->
+  <h4 class="mb-3">🍾 Consolidado do Dia (Bebidas) — Finalizados {{ hoje|date:"d/m" }}</h4>
+  <table class="table table-bordered bg-white mb-5">
+    <thead class="table-light">
+      <tr>
+        <th>Produto</th><th>Garrafas</th><th>Doses</th><th>Doses (ml)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for produto, dados in consolidado_bebidas.items %}
+      <tr>
+        <td>{{ produto }}</td>
+        <td>{{ dados.garrafas }}</td>
+        <td>{{ dados.doses }}</td>
+        <td>{{ dados.ml }} ml</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="text-center text-muted">Sem registros finalizados hoje.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- CONSOLIDADO DO DIA - ALIMENTOS (somente FINALIZADOS de hoje) -->
+  <h4 class="mb-3">🍽️ Consolidado do Dia (Alimentos) — Finalizados {{ hoje|date:"d/m" }}</h4>
+  <table class="table table-bordered bg-white">
+    <thead class="table-light">
+      <tr>
+        <th>Alimento</th><th>Quantidade</th><th>Unidade</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for nome, dados in consolidado_alimentos.items %}
+      <tr>
+        <td>{{ nome }}</td>
+        <td>{{ dados.quantidade }}</td>
+        <td>{{ dados.unidade }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3" class="text-center text-muted">Sem registros finalizados hoje.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <hr class="my-5">
+
+  <!-- LISTAS DE EVENTOS -->
+  <h4 class="mb-3">📅 Eventos Abertos (hoje)</h4>
+  {% for evento in eventos_abertos %}
+    <div class="card mb-2">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <strong>{{ evento.nome }}</strong>
+          {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
+          {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
+          — criado {{ evento.data_criacao|date:"H:i" }} por {{ evento.responsavel }}
+        </div>
+        <div class="d-flex gap-2">
+          <a href="{% url 'editar_evento' evento.id %}" class="btn btn-sm btn-primary">Editar / Finalizar</a>
+          <form method="post" action="{% url 'excluir_evento' evento.id %}" onsubmit="return confirm('Excluir este evento?');">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+          </form>
+        </div>
+      </div>
+      <div class="card-body">
+        {% if evento.produtos.all %}
+          <h6 class="text-muted">Bebidas</h6>
+          <ul class="mb-3">
+            {% for item in evento.produtos.all %}
+              <li>{{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if evento.alimentos.all %}
+          <h6 class="text-muted">Alimentos</h6>
+          <ul class="mb-0">
+            {% for item in evento.alimentos.all %}
+              <li>{{ item.alimento.nome }} — {{ item.quantidade }} {{ item.alimento.get_unidade_display }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+  {% empty %}
+    <p class="text-muted">Nenhum evento aberto hoje.</p>
+  {% endfor %}
+
+  <h4 class="mb-3 mt-4">✅ Eventos Finalizados (hoje)</h4>
+  {% for evento in eventos_finalizados %}
+    <div class="card mb-2">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <strong>{{ evento.nome }}</strong>
+          {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
+          {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
+          — finalizado {{ evento.finalizado_em|date:"H:i" }} por {{ evento.supervisor_finalizou|default:"-" }}
+        </div>
+      </div>
+      <div class="card-body">
+        {% if evento.produtos.all %}
+          <h6 class="text-muted">Bebidas</h6>
+          <ul class="mb-3">
+            {% for item in evento.produtos.all %}
+              <li>{{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+        {% if evento.alimentos.all %}
+          <h6 class="text-muted">Alimentos</h6>
+          <ul class="mb-0">
+            {% for item in evento.alimentos.all %}
+              <li>{{ item.alimento.nome }} — {{ item.quantidade }} {{ item.alimento.get_unidade_display }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+  {% empty %}
+    <p class="text-muted">Nenhum evento finalizado hoje.</p>
+  {% endfor %}
+</div>
+
+<!-- Select2 + estilo -->
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <style>
-    .select2-container .select2-selection--single {
-        height: calc(2.375rem + 2px);
-        padding: 0.375rem 0.75rem;
-        font-size: 1rem;
-        line-height: 1.5;
-        border-radius: 0.375rem;
-        display: flex;
-        align-items: center;
-    }
-    .select2-selection__rendered {
-        line-height: 1.5 !important;
-    }
-    .select2-selection__arrow {
-        height: 100% !important;
-    }
+  .select2-container .select2-selection--single {
+    height: calc(2.375rem + 2px);
+    padding: .375rem .75rem;
+    font-size: 1rem;
+    line-height: 1.5;
+    border-radius: .375rem;
+    display: flex;
+    align-items: center;
+  }
+  .select2-selection__rendered { line-height: 1.5 !important; }
+  .select2-selection__arrow { height: 100% !important; }
+  .equalize-hint { min-height: 24px; }
+  .hint-slot { min-height: 22px; line-height: 22px; }
 </style>
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 <script>
-    $(document).ready(function () {
-        $('.select2').select2({
-            placeholder: 'Selecione',
-            allowClear: true
-        });
+  // ---------- Matcher: busca por NOME ou CÓDIGO (para bebidas e alimentos)
+  function matcherBuscaCodigo(params, data) {
+    const term = (params.term || '').toLowerCase();
+    if (term === '') return data;
+    if (typeof data.text === 'undefined') return null;
+
+    const text   = (data.text || '').toLowerCase();
+    const codigo = (data.element && data.element.getAttribute('data-codigo') || '').toLowerCase();
+    return (text.indexOf(term) > -1 || codigo.indexOf(term) > -1) ? data : null;
+  }
+
+  // ---------- Render genérico (mostra [código] e, se houver, info extra como unidade)
+  function templateResultComCodigo(data) {
+    if (!data.id) return data.text;
+    const el      = data.element;
+    const codigo  = el.getAttribute('data-codigo') || '';
+    const unidade = el.getAttribute('data-unidade') || ''; // só existe nos alimentos
+    const extra   = unidade ? ` <small class="text-muted">(${unidade})</small>` : '';
+    return $(`<span>${codigo ? `[${codigo}] ` : ''}${data.text}${extra}</span>`);
+  }
+  function templateSelectionComCodigo(data) {
+    if (!data.id) return data.text;
+    const el     = data.element;
+    const codigo = el.getAttribute('data-codigo') || '';
+    return $(`<span>${codigo ? `[${codigo}] ` : ''}${data.text}</span>`);
+  }
+
+  // ---------- Inicializações
+  $(function () {
+    // BEBIDAS: agora com busca por código
+    $('.select2').select2({
+      placeholder: 'Selecione',
+      allowClear: true,
+      matcher: matcherBuscaCodigo,
+      templateResult: templateResultComCodigo,
+      templateSelection: templateSelectionComCodigo
     });
 
-    let produtos = [];
+    // ALIMENTOS: mantém busca por código + unidade
+    $('.select2-code').select2({
+      placeholder: 'Selecione',
+      allowClear: true,
+      matcher: matcherBuscaCodigo,
+      templateResult: templateResultComCodigo,
+      templateSelection: templateSelectionComCodigo
+    });
 
-    function adicionarProduto() {
-        const produtoSelect = document.getElementById('produto-select');
-        const produtoNome = produtoSelect.options[produtoSelect.selectedIndex].text;
-        const produtoId = produtoSelect.value;
-        const garrafas = parseInt(document.getElementById('garrafas').value) || 0;
-        const doses = parseInt(document.getElementById('doses').value) || 0;
+    // Dica dinâmica de unidade nos alimentos (preenche o "slot" sem quebrar o layout)
+    $('#alimento-select').on('change', function(){
+      const opt = this.options[this.selectedIndex];
+      const unidade = opt ? opt.getAttribute('data-unidade') : '';
+      const hint = document.getElementById('hint-unidade');
+      hint.textContent = unidade ? `Unidade: ${unidade}` : '\u00A0'; // NBSP quando vazio
+    });
+  });
 
-        if (garrafas === 0 && doses === 0) {
-            alert("Informe pelo menos uma garrafa ou dose.");
-            return;
-        }
+  // ==================== JS de listas temporárias ====================
+  let produtos = [];
 
-        produtos.push({ id: produtoId, nome: produtoNome, garrafas, doses });
-        atualizarLista();
+  function adicionarProduto(){
+    const produtoSelect = document.getElementById('produto-select');
+    const produtoId = produtoSelect.value;
+    const produtoNome = produtoSelect.options[produtoSelect.selectedIndex]?.text || '';
+
+    const garrafas = parseInt(document.getElementById('garrafas').value || '0', 10);
+    const doses    = parseInt(document.getElementById('doses').value || '0', 10);
+
+    if(!produtoId){
+      alert("Selecione uma bebida.");
+      return;
     }
 
-    function atualizarLista() {
-        const lista = document.getElementById('lista-produtos');
-        lista.innerHTML = "";
-        document.querySelectorAll('.input-produto').forEach(el => el.remove());
-
-        produtos.forEach((p, index) => {
-            lista.innerHTML += `
-                <div class="d-flex justify-content-between border p-2 mb-1">
-                    <div>${p.nome} — ${p.garrafas} garrafas, ${p.doses} doses</div>
-                    <button type="button" class="btn btn-sm btn-danger" onclick="removerProduto(${index})">Remover</button>
-                </div>
-                <input type="hidden" name="produto_id[]" value="${p.id}" class="input-produto">
-                <input type="hidden" name="garrafas[]" value="${p.garrafas}" class="input-produto">
-                <input type="hidden" name="doses[]" value="${p.doses}" class="input-produto">
-            `;
-        });
+    const idx = produtos.findIndex(p => p.id === produtoId);
+    if (idx >= 0) {
+      produtos[idx].garrafas = (produtos[idx].garrafas || 0) + garrafas;
+      produtos[idx].doses    = (produtos[idx].doses || 0) + doses;
+    } else {
+      produtos.push({ id: produtoId, nome: produtoNome, garrafas, doses });
     }
 
-    function removerProduto(index) {
-        produtos.splice(index, 1);
-        atualizarLista();
+    atualizarListaBebidas();
+
+    $('#produto-select').val(null).trigger('change');
+    document.getElementById('garrafas').value = '0';
+    document.getElementById('doses').value    = '0';
+  }
+
+  function atualizarListaBebidas(){
+    const lista = document.getElementById('lista-produtos');
+    lista.innerHTML = "";
+    document.querySelectorAll('.input-produto').forEach(el => el.remove());
+
+    produtos.forEach((p, i) => {
+      lista.innerHTML += `
+        <div class="d-flex justify-content-between border p-2 mb-1">
+          <div>${p.nome} — ${p.garrafas} garrafas, ${p.doses} doses</div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="editarProduto(${i})">Editar</button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="removerProduto(${i})">Remover</button>
+          </div>
+        </div>
+        <input type="hidden" name="produto_id[]" value="${p.id}" class="input-produto">
+        <input type="hidden" name="garrafas[]" value="${p.garrafas}" class="input-produto">
+        <input type="hidden" name="doses[]" value="${p.doses}" class="input-produto">
+      `;
+    });
+  }
+  function editarProduto(i){
+    const novoG = prompt("Garrafas:", produtos[i].garrafas ?? 0);
+    const novoD = prompt("Doses:", produtos[i].doses ?? 0);
+    if (novoG !== null && novoD !== null){
+      produtos[i].garrafas = parseInt(novoG || '0', 10);
+      produtos[i].doses    = parseInt(novoD || '0', 10);
+      atualizarListaBebidas();
     }
+  }
+  function removerProduto(i){
+    produtos.splice(i, 1);
+    atualizarListaBebidas();
+  }
+
+  // ---- Alimentos ----
+  let alimentosSel = [];
+
+  function adicionarAlimento(){
+    const s = document.getElementById('alimento-select');
+    const id = s.value;
+    const nome = s.options[s.selectedIndex]?.text || '';
+    const codigo = s.options[s.selectedIndex]?.getAttribute('data-codigo') || '';
+    const unidade = s.options[s.selectedIndex]?.getAttribute('data-unidade') || '';
+
+    const qtdStr = (document.getElementById('alimento-qtd').value || '0').replace(',', '.');
+    const qtd = parseFloat(qtdStr);
+    if(!id){
+      alert("Selecione um alimento.");
+      return;
+    }
+    const qtnum = isNaN(qtd) ? 0 : qtd;
+
+    const idx = alimentosSel.findIndex(a => a.id === id);
+    if (idx >= 0) {
+      alimentosSel[idx].qtd = (parseFloat(alimentosSel[idx].qtd) || 0) + qtnum;
+    } else {
+      alimentosSel.push({ id, nome, codigo, unidade, qtd: qtnum });
+    }
+
+    atualizarListaAlimentos();
+
+    $('#alimento-select').val(null).trigger('change');
+    document.getElementById('alimento-qtd').value = '';
+    document.getElementById('hint-unidade').style.display = 'none';
+  }
+
+  function atualizarListaAlimentos(){
+    const lista = document.getElementById('lista-alimentos');
+    lista.innerHTML = "";
+    document.querySelectorAll('.input-alimento').forEach(el => el.remove());
+
+    alimentosSel.forEach((a, i) => {
+      const qtdFmt = (parseFloat(a.qtd) || 0).toFixed(2);
+      lista.innerHTML += `
+        <div class="d-flex justify-content-between border p-2 mb-1">
+          <div>[${a.codigo}] ${a.nome} — ${qtdFmt} ${a.unidade}</div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="editarAlimento(${i})">Editar</button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="removerAlimento(${i})">Remover</button>
+          </div>
+        </div>
+        <input type="hidden" name="alimento_id[]" value="${a.id}" class="input-alimento">
+        <input type="hidden" name="alimento_qtd[]" value="${qtdFmt}" class="input-alimento">
+      `;
+    });
+  }
+  function editarAlimento(i){
+    const novo = prompt("Quantidade:", alimentosSel[i].qtd ?? 0);
+    if (novo !== null){
+      const v = parseFloat((novo || '0').replace(',', '.'));
+      alimentosSel[i].qtd = isNaN(v) ? 0 : v;
+      atualizarListaAlimentos();
+    }
+  }
+  function removerAlimento(i){
+    alimentosSel.splice(i, 1);
+    atualizarListaAlimentos();
+  }
 </script>
+
 {% endblock %}

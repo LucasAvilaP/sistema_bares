@@ -1,5 +1,5 @@
 from django import template
-
+from decimal import Decimal
 register = template.Library()
 
 @register.filter
@@ -33,3 +33,21 @@ def floatval(value):
 @register.filter
 def sum_quantidade_solicitada(requisicoes):
     return sum([r.quantidade_solicitada for r in requisicoes])
+
+
+@register.filter
+def as_dot(value, places=2):
+    try:
+        q = Decimal(str(value))
+    except Exception:
+        return ''
+    fmt = f'{{0:.{int(places)}f}}'
+    return fmt.format(q)  # sempre com ponto
+
+
+@register.filter
+def get_item(d, k):
+    try:
+        return d.get(k, "")
+    except Exception:
+        return ""

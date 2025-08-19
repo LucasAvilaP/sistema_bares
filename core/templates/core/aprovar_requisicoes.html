@@ -1,65 +1,122 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="container mt-4">
-    <h2 class="mb-4">✅ Aprovação de Requisições</h2>
+  <h2 class="mb-4">✅ Aprovação de Requisições</h2>
 
-    {% if messages %}
-        {% for message in messages %}
-            <div class="alert alert-success alert-dismissible fade show" role="alert">
-                {{ message }}
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-        {% endfor %}
-    {% endif %}
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-success alert-dismissible fade show" role="alert">
+        {{ message }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
 
-    {% if requisicoes %}
-        <form method="POST">
-            {% csrf_token %}
-            <div class="table-responsive">
-                <table class="table table-bordered table-striped align-middle bg-white">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Produto</th>
-                            <th>Quantidade</th>
-                            <th>Bar</th>
-                            <th>Solicitante</th>
-                            <th>Data</th>
-                            <th>Decisão</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for req in requisicoes %}
-                        <tr>
-                            <td>{{ req.produto.nome }}</td>
-                            <td>{{ req.quantidade_solicitada }}</td>
-                            <td>{{ req.bar.nome }}</td>
-                            <td>{{ req.usuario.username }}</td>
-                            <td>{{ req.data_solicitacao|date:"d/m/Y H:i" }}</td>
-                            <td>
-                                <div class="d-flex gap-3">
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="aprovacao_{{ req.id }}" value="aprovar" id="aprovar_{{ req.id }}">
-                                        <label class="form-check-label" for="aprovar_{{ req.id }}">Aprovar</label>
-                                    </div>
-                                    <div class="form-check">
-                                        <input class="form-check-input" type="radio" name="aprovacao_{{ req.id }}" value="negar" id="negar_{{ req.id }}">
-                                        <label class="form-check-label" for="negar_{{ req.id }}">Negar</label>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            <div class="text-end mt-3">
-                <button type="submit" class="btn btn-primary">
-                    ✅ Confirmar Decisões
-                </button>
-            </div>
-        </form>
-    {% else %}
-        <p class="text-muted">Nenhuma requisição pendente no momento.</p>
-    {% endif %}
+  {% if requisicoes %}
+    <form method="POST" id="form-aprovacoes">
+      {% csrf_token %}
+      <div class="table-responsive">
+        <table class="table table-bordered table-striped align-middle bg-white">
+          <thead class="table-dark">
+            <tr>
+              <th>Produto</th>
+              <th>Quantidade</th>
+              <th>Bar</th>
+              <th>Solicitante</th>
+              <th>Data</th>
+              <th>Decisão</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for req in requisicoes %}
+              <tr>
+                <td>{{ req.produto.nome }}</td>
+                <td>{{ req.quantidade_solicitada }}</td>
+                <td>{{ req.bar.nome }}</td>
+                <td>{{ req.usuario.username }}</td>
+                <td>{{ req.data_solicitacao|date:"d/m/Y H:i" }}</td>
+                <td>
+                  <div class="d-flex gap-3">
+                    <div class="form-check">
+                      <input class="form-check-input radio-dec" type="radio"
+                             name="aprovacao_{{ req.id }}" value="aprovar"
+                             id="aprovar_{{ req.id }}" data-id="{{ req.id }}">
+                      <label class="form-check-label" for="aprovar_{{ req.id }}">Aprovar</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input radio-dec" type="radio"
+                             name="aprovacao_{{ req.id }}" value="negar"
+                             id="negar_{{ req.id }}" data-id="{{ req.id }}">
+                      <label class="form-check-label" for="negar_{{ req.id }}">Negar</label>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+
+              <!-- Linha de motivo (colspan = número de colunas) -->
+              <tr id="motivo_row_{{ req.id }}" class="table-warning" style="display:none;">
+                <td colspan="6">
+                  <label for="motivo_{{ req.id }}" class="form-label fw-semibold mb-1">
+                    Motivo da negativa (obrigatório quando negar)
+                  </label>
+                  <textarea class="form-control motivo-textarea"
+                            id="motivo_{{ req.id }}"
+                            name="motivo_{{ req.id }}"
+                            rows="2"
+                            maxlength="400"
+                            placeholder="Descreva o motivo…"></textarea>
+                  <div class="form-text">Máx. 400 caracteres.</div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="text-end mt-3">
+        <button type="submit" class="btn btn-primary">✅ Confirmar Decisões</button>
+      </div>
+    </form>
+  {% else %}
+    <p class="text-muted">Nenhuma requisição pendente no momento.</p>
+  {% endif %}
 </div>
+
+<script>
+  // Alterna exibição do motivo quando selecionar Aprovar/Negar
+  document.querySelectorAll('.radio-dec').forEach(r => {
+    r.addEventListener('change', (e) => {
+      const id = e.target.getAttribute('data-id');
+      const negar = e.target.value === 'negar';
+      const row = document.getElementById(`motivo_row_${id}`);
+      const ta  = document.getElementById(`motivo_${id}`);
+      if (negar) {
+        row.style.display = '';
+        ta.required = true;
+        ta.focus();
+      } else {
+        row.style.display = 'none';
+        ta.required = false;
+        ta.value = '';
+      }
+    });
+  });
+
+  // Validação extra: se tem "negar" sem motivo, bloqueia submit.
+  document.getElementById('form-aprovacoes').addEventListener('submit', (e) => {
+    let ok = true;
+    document.querySelectorAll('.radio-dec[value="negar"]:checked').forEach(r => {
+      const id = r.getAttribute('data-id');
+      const ta = document.getElementById(`motivo_${id}`);
+      if (!ta || !ta.value.trim()) {
+        ok = false;
+        ta?.focus();
+      }
+    });
+    if (!ok) {
+      e.preventDefault();
+      alert('Informe o motivo para todas as requisições negadas.');
+    }
+  });
+</script>
 {% endblock %}

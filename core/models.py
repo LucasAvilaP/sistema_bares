@@ -37,10 +37,13 @@ class Produto(models.Model):
     )
 
     nome = models.CharField(max_length=100)
-    unidade_medida = models.CharField(max_length=20, default='un')  # 'un', 'dose'
+    codigo = models.CharField(  # <-- novo
+        max_length=30, unique=True, db_index=True,
+        blank=True, null=True  # depois dá pra tornar obrigatório
+    )
+    unidade_medida = models.CharField(max_length=20, default='un')
     categoria = models.CharField(max_length=20, choices=CATEGORIAS)
-    doses_por_garrafa = models.PositiveIntegerField(null=True, blank=True)  # Ex: 16 doses por garrafa
-
+    doses_por_garrafa = models.PositiveIntegerField(null=True, blank=True)
     ativo = models.BooleanField(default=True)
 
     def __str__(self):
@@ -110,17 +113,19 @@ class RequisicaoProduto(models.Model):
     usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     observacao = models.TextField(blank=True, null=True)
 
-    # ✅ NOVO CAMPO
+    # quem decidiu
     usuario_aprovador = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='requisicoes_aprovadas'
     )
 
+    # 🔹 NOVOS CAMPOS
+    motivo_negativa = models.TextField(blank=True, null=True)
+    data_decisao = models.DateTimeField(blank=True, null=True)
+
     def __str__(self):
         return f"{self.produto.nome} - {self.quantidade_solicitada} un ({self.status})"
+
 
 
 
@@ -180,12 +185,43 @@ class AcessoUsuarioBar(models.Model):
 
 
 class Evento(models.Model):
+    STATUS_CHOICES = (
+        ('ABERTO', 'Aberto'),
+        ('FINALIZADO', 'Finalizado'),
+    )
+
     nome = models.CharField(max_length=100)
     data_criacao = models.DateTimeField(auto_now_add=True)
     responsavel = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
 
+    # ✅ já adicionados antes
+    numero_pessoas = models.PositiveIntegerField(null=True, blank=True)
+    horas = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
+
+    # ✅ NOVOS CAMPOS (fluxo)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='ABERTO')
+    data_evento = models.DateField(default=timezone.localdate)  # dia do evento
+    finalizado_em = models.DateTimeField(null=True, blank=True)
+    supervisor_finalizou = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='eventos_finalizados'
+    )
+
+     # ✅ NOVOS CAMPOS: controle de baixa do estoque
+    baixado_estoque = models.BooleanField(default=False)
+    baixado_por = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='eventos_baixados'
+    )
+    baixado_em = models.DateTimeField(null=True, blank=True)
+    baixado_obs = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['data_evento', 'baixado_estoque']),
+        ]
+
+
     def __str__(self):
-        return f"{self.nome} - {self.data_criacao.date()}"
+        return f"{self.nome} ({self.get_status_display()}) - {self.data_evento}"
 
 class EventoProduto(models.Model):
     evento = models.ForeignKey(Evento, on_delete=models.CASCADE, related_name='produtos')
@@ -196,6 +232,34 @@ class EventoProduto(models.Model):
     def __str__(self):
         return f"{self.produto.nome} - {self.garrafas} garrafas, {self.doses} doses"
 
+
+# ✅ Catálogo simples de alimentos (somente para eventos)
+class Alimento(models.Model):
+    UNIDADE_CHOICES = (
+        ('un', 'Unidade'),
+        ('kg', 'Quilo'),
+        ('g', 'Grama'),
+        ('porcao', 'Porção'),
+        ('l', 'Litro'),
+        ('ml', 'Mililitro'),
+    )
+    nome = models.CharField(max_length=120)
+    codigo = models.CharField(max_length=30, unique=True)  # usado no autocomplete
+    unidade = models.CharField(max_length=10, choices=UNIDADE_CHOICES, default='un')
+    ativo = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"[{self.codigo}] {self.nome}"
+
+
+# Itens de alimento consumidos no evento (não mexe em estoque de bar!)
+class EventoAlimento(models.Model):
+    evento = models.ForeignKey(Evento, on_delete=models.CASCADE, related_name='alimentos')
+    alimento = models.ForeignKey(Alimento, on_delete=models.PROTECT)
+    quantidade = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    def __str__(self):
+        return f"{self.alimento.nome} - {self.quantidade} {self.alimento.unidade}"
 
 
 class PermissaoPagina(models.Model):
@@ -217,3 +281,51 @@ class PermissaoPagina(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.get_nome_pagina_display()}"
+    
+
+
+
+class PerdaProduto(models.Model):
+    MOTIVOS = (
+        ('QUEBRA', 'Quebra de garrafa'),
+        ('DERRAMAMENTO', 'Derramamento'),
+        ('SOBRA', 'Descarte de sobra'),
+        ('QUALIDADE', 'Produto impróprio'),
+        ('OUTRO', 'Outro'),
+    )
+
+    restaurante = models.ForeignKey(Restaurante, on_delete=models.CASCADE, related_name='perdas')
+    bar         = models.ForeignKey(Bar, on_delete=models.CASCADE, related_name='perdas')
+    produto     = models.ForeignKey(Produto, on_delete=models.PROTECT, related_name='perdas')
+
+    garrafas = models.PositiveIntegerField(default=0)
+    doses    = models.PositiveIntegerField(default=0)
+
+    motivo      = models.CharField(max_length=20, choices=MOTIVOS)
+    observacao  = models.TextField(blank=True, null=True)
+
+    usuario        = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    data_registro  = models.DateTimeField(default=timezone.now)
+
+    # auditoria do estoque no momento da perda
+    estoque_antes_garrafas = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    estoque_antes_doses    = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    estoque_depois_garrafas = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    estoque_depois_doses    = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+
+    # ✅ marcação de baixa (conciliado)
+    baixado = models.BooleanField(default=False)
+    baixado_em = models.DateTimeField(blank=True, null=True)
+    baixado_por = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='perdas_baixadas'
+    )
+    baixado_obs = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        ordering = ['-data_registro']
+        indexes = [
+            models.Index(fields=['baixado', 'data_registro']),
+        ]
+
+    def __str__(self):
+        return f"{self.bar.nome} | {self.produto.nome} (-{self.garrafas} garrafas, -{self.doses} doses)"

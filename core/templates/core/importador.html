@@ -1,0 +1,165 @@
+{# templates/core/importador.html #}
+{% extends "base.html" %}
+{% load static %}
+{% load custom_filters %}
+
+{% block content %}
+<div class="container mt-4">
+  <h2 class="mb-4">🧾 Assistente de Importação</h2>
+
+  {% if messages %}
+    {% for m in messages %}
+      <div class="alert alert-{{ m.tags|default:'info' }} mb-2">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% if step == 1 %}
+    <form method="post" enctype="multipart/form-data" class="card p-3 shadow-sm">
+      {% csrf_token %}
+      <input type="hidden" name="step" value="1">
+
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Tipo de Importação</label>
+          <select name="tipo" class="form-select" required>
+            <option value="produtos">Bebidas (Produtos)</option>
+            <option value="alimentos">Alimentos (Eventos)</option>
+          </select>
+          <div class="form-text">Obrigatórios: <strong>código</strong> e <strong>nome</strong>.</div>
+        </div>
+
+        <div class="col-md-8">
+          <label class="form-label">Planilha (.xlsx / .csv)</label>
+          <input type="file" name="planilha" accept=".xlsx,.xls,.csv" class="form-control" required>
+          <div class="form-text">A primeira linha deve ser o cabeçalho.</div>
+        </div>
+      </div>
+
+      <div class="d-flex justify-content-end mt-3">
+        <button class="btn btn-primary">➡️ Continuar</button>
+      </div>
+    </form>
+  {% elif step == 2 %}
+    <form method="post" class="card p-3 shadow-sm">
+      {% csrf_token %}
+      <input type="hidden" name="step" value="2">
+      <input type="hidden" name="file_id" value="{{ file_id }}">
+      <input type="hidden" name="tipo" value="{{ tipo }}">
+
+      <h5 class="mb-3">Mapeamento de Colunas</h5>
+
+      <div class="row g-3">
+        <div class="col-md-3">
+          <label class="form-label">Código *</label>
+          <select name="map_codigo" class="form-select" required>
+            <option value="">-- selecione --</option>
+            {% for c in columns %}
+              <option value="{{ c }}" {% if sugestoes.codigo == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-5">
+          <label class="form-label">Nome *</label>
+          <select name="map_nome" class="form-select" required>
+            <option value="">-- selecione --</option>
+            {% for c in columns %}
+              <option value="{{ c }}" {% if sugestoes.nome == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% if tipo == "produtos" %}
+          <div class="col-md-2">
+            <label class="form-label">Categoria</label>
+            <select name="map_categoria" class="form-select">
+              <option value="">(usar "OUTRO")</option>
+              {% for c in columns %}<option value="{{ c }}" {% if sugestoes.categoria == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Doses por Garrafa</label>
+            <select name="map_doses" class="form-select">
+              <option value="">(deixar vazio)</option>
+              {% for c in columns %}<option value="{{ c }}" {% if sugestoes.doses_por_garrafa == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Unidade Medida</label>
+            <select name="map_um" class="form-select">
+              <option value="">(usar "un")</option>
+              {% for c in columns %}<option value="{{ c }}" {% if sugestoes.unidade_medida == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Ativo</label>
+            <select name="map_ativo" class="form-select">
+              <option value="">(usar "Sim")</option>
+              {% for c in columns %}<option value="{{ c }}" {% if sugestoes.ativo == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+        {% else %}
+          <div class="col-md-2">
+            <label class="form-label">Unidade</label>
+            <select name="map_unidade" class="form-select">
+              <option value="">(usar "un")</option>
+              {% for c in columns %}<option value="{{ c }}" {% if sugestoes.unidade == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Ativo</label>
+            <select name="map_ativo" class="form-select">
+              <option value="">(usar "Sim")</option>
+              {% for c in columns %}<option value="{{ c }}" {% if sugestoes.ativo == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="form-check mt-3">
+        <input class="form-check-input" type="checkbox" id="atualizar" name="atualizar" checked>
+        <label class="form-check-label" for="atualizar">
+          Atualizar registros existentes com o mesmo código
+        </label>
+      </div>
+
+      <div class="mt-4">
+        <h6>Preview (primeiras linhas)</h6>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered">
+            <thead class="table-light">
+              <tr>
+                {% for c in columns %}<th>{{ c }}</th>{% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in preview %}
+              <tr>
+                {% for c in columns %}
+                  <td>{{ row|get_item:c }}</td>
+                {% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="d-flex justify-content-between mt-3">
+        <a href="{% url 'assistente_importacao' %}" class="btn btn-outline-secondary">⬅️ Voltar</a>
+        <button class="btn btn-success">✅ Confirmar e Importar</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+{% endblock %}
+
+{# helper simples pra dict access #}
+{% comment %}
+Em templatetags (opcional), crie um filtro get_item.
+{% endcomment %}

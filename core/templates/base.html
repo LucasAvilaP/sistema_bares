@@ -2,67 +2,123 @@
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
-    <meta charset="UTF-8">
-    <title>{% block title %}Sistema de Controle de Bares{% endblock %}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="{% static 'core/style.css' %}">
+  <meta charset="UTF-8">
+  <title>{% block title %}Sistema de Controle de Bares{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="{% static 'core/style.css' %}">
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-        <div class="container-fluid">
-            <a class="navbar-brand" href="/dashboard/">Controle de Bares</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
+  {% with request.resolver_match.url_name as current %}
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="{% url 'dashboard' %}">Controle de Bares</a>
 
-            <div class="collapse navbar-collapse justify-content-between" id="navbarNav">
-                <ul class="navbar-nav">
-                    <li class="nav-item"><a class="nav-link" href="/contagem/">Contagem</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/transferencias/entre-bares">Transferências</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/eventos/">Eventos</a></li>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+              data-bs-target="#navbarNav" aria-controls="navbarNav"
+              aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
 
-                    <!-- Dropdown Requisições -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="dropdownRequisicoes" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                            Requisições
-                        </a>
-                        <ul class="dropdown-menu" aria-labelledby="dropdownRequisicoes">
-                            <li><a class="dropdown-item" href="{% url 'requisicao' %}">Nova Requisição</a></li>
-                            <li><a class="dropdown-item" href="{% url 'aprovar-requisicoes' %}">Aprovar/Rejeitar</a></li>
-                        </ul>
-                    </li>
+      <div class="collapse navbar-collapse justify-content-between" id="navbarNav">
+        <ul class="navbar-nav">
 
-                    <!-- Dropdown Históricos -->
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="dropdownHistoricos" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                            Históricos
-                        </a>
-                        <ul class="dropdown-menu" aria-labelledby="dropdownHistoricos">
-                            <li><a class="dropdown-item" href="{% url 'historico-contagens' %}">Histórico de Contagens</a></li>
-                            <li><a class="dropdown-item" href="{% url 'historico-requisicoes' %}">Histórico de Requisições</a></li>
-                            <li><a class="dropdown-item" href="{% url 'historico_transferencias' %}">Histórico de Transferências</a></li>
-                        </ul>
-                    </li>
-                    <li class="nav-item"><a class="nav-link" href="{% url 'entrada-mercadorias' %}">Entrada Estoque</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/relatorios/">Relatórios</a></li>
-                    <li class="nav-item"><a class="nav-link" href="{% url 'logout' %}">Sair</a></li>
-                </ul>
+          <!-- Contagem -->
+          <li class="nav-item">
+            <a class="nav-link {% if current == 'contagem' or current == 'historico-contagens' %}active{% endif %}"
+               href="{% url 'contagem' %}">Contagem</a>
+          </li>
 
-                <!-- NOME DO BAR À DIREITA -->
-                {% if request.session.bar_nome %}
-                    <span class="navbar-text text-white">
-                        🧃 <strong>{{ request.session.bar_nome }}</strong>
-                    </span>
-                {% endif %}
-            </div>
-        </div>
-    </nav>
+          <!-- Registrar Perdas -->
+          <li class="nav-item">
+            <a class="nav-link {% if current in 'pagina_perdas' %}active{% endif %}"
+              href="{% url 'pagina_perdas' %}">Registrar Perdas</a>
+          </li>
 
-    <div class="container">
-        {% block content %}
-        {% endblock %}
+          <!-- Transferências -->
+          <li class="nav-item">
+            <a class="nav-link {% if current == 'transferencia-bares' or current == 'historico_transferencias' %}active{% endif %}"
+               href="{% url 'transferencia-bares' %}">Transferências</a>
+          </li>
+
+          <!-- Eventos (novo fluxo) -->
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if current in 'pagina_eventos editar_evento relatorio_eventos' %}active{% endif %}"
+               href="#" id="dropdownEventos" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Eventos
+            </a>
+            <ul class="dropdown-menu" aria-labelledby="dropdownEventos">
+              <li><a class="dropdown-item" href="{% url 'pagina_eventos' %}">Página de Eventos</a></li>
+              <li><a class="dropdown-item" href="{% url 'relatorio_eventos' %}">Relatório de Eventos</a></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><a class="dropdown-item" href="{% url 'exportar_consolidado_eventos_excel' %}">Exportar Consolidado (Excel)</a></li>
+            </ul>
+          </li>
+
+          <!-- Requisições -->
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if current in 'requisicao aprovar-requisicoes historico-requisicoes' %}active{% endif %}"
+               href="#" id="dropdownRequisicoes" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Requisições
+            </a>
+            <ul class="dropdown-menu" aria-labelledby="dropdownRequisicoes">
+              <li><a class="dropdown-item" href="{% url 'requisicao' %}">Nova Requisição</a></li>
+              <li><a class="dropdown-item" href="{% url 'aprovar-requisicoes' %}">Aprovar/Rejeitar</a></li>
+              <li><a class="dropdown-item" href="{% url 'historico-requisicoes' %}">Histórico de Requisições</a></li>
+            </ul>
+          </li>
+
+          <!-- Históricos -->
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle {% if current in 'historico-contagens historico-requisicoes historico_transferencias' %}active{% endif %}"
+               href="#" id="dropdownHistoricos" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Históricos
+            </a>
+            <ul class="dropdown-menu" aria-labelledby="dropdownHistoricos">
+              <li><a class="dropdown-item" href="{% url 'historico-contagens' %}">Histórico de Contagens</a></li>
+              <li><a class="dropdown-item" href="{% url 'historico-requisicoes' %}">Histórico de Requisições</a></li>
+              <li><a class="dropdown-item" href="{% url 'historico_transferencias' %}">Histórico de Transferências</a></li>
+            </ul>
+          </li>
+
+          <!-- Entrada de Estoque -->
+          <li class="nav-item">
+            <a class="nav-link {% if current == 'entrada-mercadorias' %}active{% endif %}"
+               href="{% url 'entrada-mercadorias' %}">Entrada Estoque</a>
+          </li>
+
+          <!-- Relatórios (hub) -->
+          <li class="nav-item">
+            <a class="nav-link {% if current == 'relatorios' %}active{% endif %}"
+               href="{% url 'relatorios' %}">Relatórios</a>
+          </li>
+
+          <li class="nav-item">
+            <a class="nav-link {% if current == 'assistente_importacao' %}active{% endif %}"
+              href="{% url 'assistente_importacao' %}">Importação</a>
+          </li>
+
+
+          <!-- Sair -->
+          <li class="nav-item">
+            <a class="nav-link" href="{% url 'logout' %}">Sair</a>
+          </li>
+        </ul>
+
+        <!-- NOME DO BAR À DIREITA -->
+        {% if request.session.bar_nome %}
+          <span class="navbar-text text-white">
+            🧃 <strong>{{ request.session.bar_nome }}</strong>
+          </span>
+        {% endif %}
+      </div>
     </div>
+  </nav>
+  {% endwith %}
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <div class="container">
+    {% block content %}{% endblock %}
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

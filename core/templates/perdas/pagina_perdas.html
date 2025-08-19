@@ -1,0 +1,168 @@
+{# templates/perdas/pagina_perdas.html #}
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="container">
+  <h2 class="mb-1">🧯 Registro de Perdas</h2>
+  <p class="text-muted mb-4">Bar: <strong>{{ bar.nome }}</strong></p>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-{{ message.tags|default:'info' }}" role="alert">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <!-- Formulário -->
+  <form method="post" action="{% url 'registrar_perda' %}" class="mb-4" id="perda-form" autocomplete="off">
+    {% csrf_token %}
+
+    <div class="row g-3 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label">Produto (bebida)</label>
+        <select name="produto" id="produto-select" class="form-select select2-produto" required>
+          <option value="">Selecione</option>
+          {% for p in produtos %}
+            <option value="{{ p.id }}" {% if p.codigo %}data-codigo="{{ p.codigo }}"{% endif %}>
+              {% if p.codigo %} {% endif %}{{ p.nome }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Garrafas</label>
+        <input type="number" min="0" step="1" class="form-control" name="garrafas" value="0">
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label">Doses</label>
+        <input type="number" min="0" step="1" class="form-control" name="doses" value="0">
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label d-none d-md-block">&nbsp;</label>
+        <button class="btn btn-danger w-100">➖ Registrar Perda</button>
+      </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+      <div class="col-md-4">
+        <label class="form-label">Motivo</label>
+        <select name="motivo" class="form-select">
+          <option value="QUEBRA">Quebra de garrafa</option>
+          <option value="DERRAMAMENTO">Derramamento</option>
+          <option value="SOBRA">Descarte de sobra</option>
+          <option value="QUALIDADE">Produto impróprio</option>
+          <option value="OUTRO">Outro</option>
+        </select>
+      </div>
+      <div class="col-md-8">
+        <label class="form-label">Observação</label>
+        <input type="text" name="observacao" class="form-control"
+               placeholder="Ex.: quebrou ao abrir, derramou na bandeja, etc.">
+      </div>
+    </div>
+  </form>
+
+  <!-- Consolidado do dia -->
+  <h4 class="mb-2">📊 Consolidado do Dia — {{ hoje|date:"d/m" }}</h4>
+  <table class="table table-bordered bg-white">
+    <thead class="table-light">
+      <tr>
+        <th>Produto</th>
+        <th class="text-end">Garrafas</th>
+        <th class="text-end">Doses</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if consolidado %}
+        {% for nome, d in consolidado.items %}
+          <tr>
+            <td>{{ nome }}</td>
+            <td class="text-end">{{ d.garrafas }}</td>
+            <td class="text-end">{{ d.doses }}</td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="3" class="text-center text-muted">Sem perdas registradas hoje.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <!-- Lista de perdas do dia -->
+  <h4 class="mt-4 mb-2">🗂️ Perdas Registradas (hoje)</h4>
+  {% for p in perdas_hoje %}
+    <div class="card mb-2">
+      <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+          <strong>{{ p.bar.nome }}</strong> — {{ p.produto.nome }}
+          • <span class="text-danger">-{{ p.garrafas }} garrafas, -{{ p.doses }} doses</span>
+          • {{ p.get_motivo_display }}
+          • {{ p.data_registro|date:"H:i" }}
+          {% if p.observacao %} — <em>{{ p.observacao }}</em>{% endif %}
+          <div class="text-muted small">
+            Estoque: {{ p.estoque_antes_garrafas }}→{{ p.estoque_depois_garrafas }} garrafas,
+            {{ p.estoque_antes_doses }}→{{ p.estoque_depois_doses }} doses
+          </div>
+        </div>
+        <form method="post" action="{% url 'excluir_perda' p.id %}"
+              onsubmit="return confirm('Excluir esta perda e devolver ao estoque?')">
+          {% csrf_token %}
+          <button class="btn btn-sm btn-outline-secondary">Desfazer</button>
+        </form>
+      </div>
+    </div>
+  {% empty %}
+    <p class="text-muted">Nenhuma perda registrada hoje.</p>
+  {% endfor %}
+</div>
+
+<!-- Select2 + estilo -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+  .select2-container .select2-selection--single {
+    height: calc(2.375rem + 2px);
+    padding: .375rem .75rem;
+    font-size: 1rem;
+    line-height: 1.5;
+    border-radius: .375rem;
+    display: flex;
+    align-items: center;
+  }
+  .select2-selection__rendered { line-height: 1.5 !important; }
+  .select2-selection__arrow { height: 100% !important; }
+</style>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+<script>
+  // Busca por nome OU código (data-codigo) no Select2
+  function matcherBuscaCodigo(params, data) {
+    const term = (params.term || '').toLowerCase();
+    if (term === '') return data;
+    if (typeof data.text === 'undefined') return null;
+
+    const text = (data.text || '').toLowerCase();
+    const codigo = (data.element.getAttribute('data-codigo') || '').toLowerCase();
+    return (text.indexOf(term) > -1 || codigo.indexOf(term) > -1) ? data : null;
+  }
+
+  function tplWithCodigo(data) {
+    if (!data.id) return data.text;
+    const el = data.element;
+    const codigo = el.getAttribute('data-codigo') || '';
+    return $(`<span>${codigo ? `[${codigo}] ` : ''}${data.text}</span>`);
+  }
+
+  $(function(){
+    $('.select2-produto').select2({
+      placeholder: 'Selecione',
+      allowClear: true,
+      matcher: matcherBuscaCodigo,
+      templateResult: tplWithCodigo,
+      templateSelection: tplWithCodigo
+    });
+  });
+</script>
+{% endblock %}

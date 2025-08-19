@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% load custom_filters %}
+{% load l10n %}
+{% block content %}
+<div class="container">
+  <h2 class="mb-3">🛠️ Editar / Finalizar Evento</h2>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-success" role="alert">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="mb-3">
+    <strong>{{ evento.nome }}</strong>
+    {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
+    {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
+    <div class="text-muted">Data: {{ evento.data_evento|date:"d/m/Y" }} • Status: {{ evento.get_status_display }}</div>
+  </div>
+
+  <form method="post">
+    {% csrf_token %}
+
+    <!-- BEBIDAS EXISTENTES -->
+    <h5 class="mt-4">🍾 Bebidas</h5>
+    <div class="table-responsive">
+      <table class="table table-bordered bg-white">
+        <thead class="table-light">
+          <tr><th>Produto</th><th style="width:160px;">Garrafas</th><th style="width:160px;">Doses</th></tr>
+        </thead>
+        <tbody>
+          {% for ep in evento.produtos.all %}
+          <tr>
+            <td>{{ ep.produto.nome }}</td>
+            <td>
+              <input name="prod_g_{{ ep.id }}" type="number" min="0" step="1" class="form-control"
+                     value="{% localize off %}{{ ep.garrafas }}{% endlocalize %}">
+            </td>
+            <td>
+              <input name="prod_d_{{ ep.id }}" type="number" min="0" step="1" class="form-control"
+                     value="{% localize off %}{{ ep.doses }}{% endlocalize %}">
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="3" class="text-muted">Sem bebidas neste evento.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ADICIONAR NOVA BEBIDA -->
+    <div class="row g-2 align-items-end mb-4">
+      <div class="col-md-6">
+        <label class="form-label">Adicionar bebida</label>
+        <select name="novo_produto" class="form-select">
+          <option value="">Selecione</option>
+          {% for p in produtos %}
+            <option value="{{ p.id }}">{{ p.nome }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Garrafas</label>
+        <input name="novo_garrafas" type="number" min="0" step="1" class="form-control" value="0">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Doses</label>
+        <input name="novo_doses" type="number" min="0" step="1" class="form-control" value="0">
+      </div>
+    </div>
+
+    <!-- ALIMENTOS EXISTENTES -->
+    <h5 class="mt-3">🍽️ Alimentos</h5>
+    <div class="table-responsive">
+      <table class="table table-bordered bg-white">
+        <thead class="table-light">
+          <tr><th>Alimento</th><th style="width:220px;">Quantidade</th><th>Unidade</th></tr>
+        </thead>
+        <tbody>
+          {% for ea in evento.alimentos.all %}
+          <tr>
+            <td>{{ ea.alimento.nome }}</td>
+            <td>
+              <input name="ali_q_{{ ea.id }}" type="number" min="0" step="0.01" class="form-control"
+                     value="{{ ea.quantidade|as_dot:2 }}">
+            </td>
+            <td>{{ ea.alimento.get_unidade_display }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="3" class="text-muted">Sem alimentos neste evento.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ADICIONAR NOVO ALIMENTO -->
+    <div class="row g-2 align-items-end mb-4">
+      <div class="col-md-8">
+        <label class="form-label">Adicionar alimento</label>
+        <select name="novo_alimento" class="form-select">
+          <option value="">Selecione</option>
+          {% for a in alimentos %}
+            <option value="{{ a.id }}">[{{ a.codigo }}] {{ a.nome }} ({{ a.get_unidade_display }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Quantidade</label>
+        <input name="novo_qtd" type="number" min="0" step="0.01" class="form-control" placeholder="ex.: 2,50">
+      </div>
+    </div>
+
+    <div class="d-flex justify-content-end gap-2 mt-3">
+      <button type="submit" class="btn btn-outline-secondary" name="salvar">💾 Salvar parcial</button>
+      <button type="submit" class="btn btn-primary" name="finalizar" value="1">✅ Finalizar evento</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
