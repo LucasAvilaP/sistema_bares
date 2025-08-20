@@ -45,29 +45,61 @@
       >📥 Exportar Relatório para Excel</a>
     </div>
 
-    <!-- Tabela Consolidada -->
-    <div class="table-responsive">
-      <table class="table table-bordered bg-white">
-        <thead class="table-light">
-          <tr>
-            <th>Produto</th>
-            <th class="text-end">Garrafas</th>
-            <th class="text-end">Doses</th>
-            <th class="text-end">Doses (ml)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for produto, dados in consolidado.items %}
-          <tr>
-            <td>{{ produto }}</td>
-            <td class="text-end">{{ dados.garrafas|intcomma }}</td>
-            <td class="text-end">{{ dados.doses|floatformat:2 }}</td>
-            <td class="text-end">{{ dados.ml|floatformat:0 }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <!-- Tabela Consolidada - Bebidas -->
+    {% if consolidado_bebidas %}
+    <div class="mb-4">
+      <h6 class="mb-2">🍹 Bebidas</h6>
+      <div class="table-responsive">
+        <table class="table table-bordered bg-white">
+          <thead class="table-light">
+            <tr>
+              <th>Produto</th>
+              <th class="text-end">Garrafas</th>
+              <th class="text-end">Doses</th>
+              <th class="text-end">Doses (ml)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for produto, dados in consolidado_bebidas.items %}
+            <tr>
+              <td>{{ produto }}</td>
+              <td class="text-end">{{ dados.garrafas|intcomma }}</td>
+              <td class="text-end">{{ dados.doses|floatformat:2 }}</td>
+              <td class="text-end">{{ dados.ml|floatformat:0 }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
+    {% endif %}
+
+    <!-- Tabela Consolidada - Alimentos -->
+    {% if consolidado_alimentos %}
+    <div class="mb-4">
+      <h6 class="mb-2">🍽️ Alimentos</h6>
+      <div class="table-responsive">
+        <table class="table table-bordered bg-white">
+          <thead class="table-light">
+            <tr>
+              <th>Alimento</th>
+              <th class="text-end">Quantidade</th>
+              <th class="text-center">Unidade</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for alimento, dados in consolidado_alimentos.items %}
+            <tr>
+              <td>{{ alimento }}</td>
+              <td class="text-end">{{ dados.quantidade|floatformat:2 }}</td>
+              <td class="text-center">{{ dados.unidade }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
 
     <hr class="my-4">
 
@@ -102,17 +134,19 @@
               {% else %}
                 <span class="badge bg-warning text-dark">Pendente de baixa</span>
               {% endif %}
+              {% if e.pessoas %}<span class="badge bg-info text-dark">Pessoas: {{ e.pessoas }}</span>{% endif %}
+              {% if e.horas %}<span class="badge bg-info text-dark">Horas: {{ e.horas }}</span>{% endif %}
             </div>
           </div>
 
           <div class="d-flex gap-2 align-items-center">
-            <span class="badge bg-secondary">Garrafas: {{ e.totais.garrafas|intcomma }}</span>
-            <span class="badge bg-secondary">Doses: {{ e.totais.doses|floatformat:2 }}</span>
-            <span class="badge bg-secondary">ML: {{ e.totais.ml|floatformat:0 }}</span>
+            <span class="badge bg-secondary">Garrafas: {{ e.totais_bebidas.garrafas|intcomma }}</span>
+            <span class="badge bg-secondary">Doses: {{ e.totais_bebidas.doses|floatformat:2 }}</span>
+            <span class="badge bg-secondary">ML: {{ e.totais_bebidas.ml|floatformat:0 }}</span>
           </div>
         </div>
 
-        <!-- 🔹 Linha de ação (observação + botão) logo abaixo do cabeçalho -->
+        <!-- 🔹 Linha de ação (observação + botão) -->
         {% if ev.status == "FINALIZADO" %}
           <div class="px-3 py-2 border-bottom">
             {% if not ev.baixado_estoque %}
@@ -144,10 +178,14 @@
           </div>
         {% endif %}
 
-        <!-- Tabela do evento -->
+        <!-- Tabelas do evento -->
         <div class="table-responsive">
+          <!-- Bebidas -->
           <table class="table table-sm mb-0">
             <thead class="table-light">
+              <tr>
+                <th colspan="4">🍹 Bebidas</th>
+              </tr>
               <tr>
                 <th>Produto</th>
                 <th class="text-end">Garrafas</th>
@@ -156,23 +194,50 @@
               </tr>
             </thead>
             <tbody>
-              {% for item in e.itens %}
+              {% for item in e.itens_bebidas %}
               <tr>
                 <td>{{ item.produto }}</td>
                 <td class="text-end">{{ item.garrafas|intcomma }}</td>
                 <td class="text-end">{{ item.doses|floatformat:2 }}</td>
                 <td class="text-end">{{ item.ml|floatformat:0 }}</td>
               </tr>
+              {% empty %}
+              <tr><td colspan="4" class="text-muted">Sem lançamentos de bebidas.</td></tr>
               {% endfor %}
             </tbody>
             <tfoot class="table-light">
               <tr>
-                <th>Total do evento</th>
-                <th class="text-end">{{ e.totais.garrafas|intcomma }}</th>
-                <th class="text-end">{{ e.totais.doses|floatformat:2 }}</th>
-                <th class="text-end">{{ e.totais.ml|floatformat:0 }}</th>
+                <th>Total (bebidas)</th>
+                <th class="text-end">{{ e.totais_bebidas.garrafas|intcomma }}</th>
+                <th class="text-end">{{ e.totais_bebidas.doses|floatformat:2 }}</th>
+                <th class="text-end">{{ e.totais_bebidas.ml|floatformat:0 }}</th>
               </tr>
             </tfoot>
+          </table>
+
+          <!-- Alimentos -->
+          <table class="table table-sm mb-0 mt-3">
+            <thead class="table-light">
+              <tr>
+                <th colspan="3">🍽️ Alimentos</th>
+              </tr>
+              <tr>
+                <th>Alimento</th>
+                <th class="text-end">Quantidade</th>
+                <th class="text-center">Unidade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ali in e.itens_alimentos %}
+              <tr>
+                <td>{{ ali.alimento }}</td>
+                <td class="text-end">{{ ali.quantidade|floatformat:2 }}</td>
+                <td class="text-center">{{ ali.unidade }}</td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="3" class="text-muted">Sem lançamentos de alimentos.</td></tr>
+              {% endfor %}
+            </tbody>
           </table>
         </div>
       </div>

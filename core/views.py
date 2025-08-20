@@ -1627,7 +1627,7 @@ def relatorio_contagem_atual(request):
 
 
 
-DOSE_ML = Decimal('50')  # já usado no seu relatório
+DOSE_ML = Decimal('50')  # ml por dose
 
 @login_required
 def relatorio_eventos(request):
@@ -1645,15 +1645,13 @@ def relatorio_eventos(request):
             data_inicio = date.today().replace(day=1)
             data_fim = date.today()
     else:
-        # Por experiência: relatório do dia anterior é muito usado
-        # se quiser forçar “ontem”, troque estas duas linhas:
         data_inicio = date.today().replace(day=1)
         data_fim = date.today()
 
     eventos_qs = (
         Evento.objects
         .filter(data_criacao__date__range=(data_inicio, data_fim))
-        .prefetch_related('produtos__produto')
+        .prefetch_related('produtos__produto', 'alimentos__alimento')  # ✅ agora traz alimentos também
         .select_related('responsavel', 'supervisor_finalizou', 'baixado_por')
         .order_by('-data_criacao')
     )
@@ -1662,42 +1660,71 @@ def relatorio_eventos(request):
     if somente_nao_baixados:
         eventos_qs = eventos_qs.filter(baixado_estoque=False, status='FINALIZADO')
 
-    # consolida por produto
-    consolidado = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
+    # ✅ dois consolidados: bebidas e alimentos
+    consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
+    consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
 
     eventos = []
     for ev in eventos_qs:
+        # --- bebidas (por evento)
         total_g, total_d, total_ml = 0, Decimal('0'), Decimal('0')
-        itens = []
+        itens_bebidas = []
         for item in ev.produtos.all():
             g = int(item.garrafas or 0)
             d = Decimal(item.doses or 0)
             ml = d * DOSE_ML
-            itens.append({'produto': item.produto.nome, 'garrafas': g, 'doses': d, 'ml': ml})
+
+            itens_bebidas.append({'produto': item.produto.nome, 'garrafas': g, 'doses': d, 'ml': ml})
             total_g += g; total_d += d; total_ml += ml
+
+            # consolida
             nome_prod = item.produto.nome
-            consolidado[nome_prod]['garrafas'] += g
-            consolidado[nome_prod]['doses'] += d
-            consolidado[nome_prod]['ml'] += ml
+            consolidado_bebidas[nome_prod]['garrafas'] += g
+            consolidado_bebidas[nome_prod]['doses'] += d
+            consolidado_bebidas[nome_prod]['ml'] += ml
+
+        # --- alimentos (por evento)
+        itens_alimentos = []
+        total_qtd_alimentos = Decimal('0')
+        for ali in ev.alimentos.all():
+            nome = ali.alimento.nome
+            qtd = Decimal(ali.quantidade or 0)
+            uni = ali.alimento.unidade or ''
+            itens_alimentos.append({'alimento': nome, 'quantidade': qtd, 'unidade': uni})
+            total_qtd_alimentos += qtd
+
+            # consolida
+            consolidado_alimentos[nome]['quantidade'] += qtd
+            consolidado_alimentos[nome]['unidade'] = uni
 
         eventos.append({
             'obj': ev,
             'data': localtime(ev.data_criacao),
             'responsavel': getattr(ev, 'responsavel', ''),
-            'itens': itens,
-            'totais': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
+            # ✅ novos campos:
+            'pessoas': ev.numero_pessoas,
+            'horas': ev.horas,
+            # blocos:
+            'itens_bebidas': itens_bebidas,
+            'totais_bebidas': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
+            'itens_alimentos': itens_alimentos,
+            'total_qtd_alimentos': total_qtd_alimentos,
         })
 
-    consolidado = OrderedDict(sorted(consolidado.items(), key=lambda kv: kv[0].lower()))
+    # ordenações amigáveis
+    consolidado_bebidas = OrderedDict(sorted(consolidado_bebidas.items(), key=lambda kv: kv[0].lower()))
+    consolidado_alimentos = OrderedDict(sorted(consolidado_alimentos.items(), key=lambda kv: kv[0].lower()))
 
     return render(request, 'core/relatorios/relatorio_eventos.html', {
         'eventos': eventos,
-        'consolidado': consolidado,
+        'consolidado_bebidas': consolidado_bebidas,   # ✅
+        'consolidado_alimentos': consolidado_alimentos,  # ✅
         'data_inicio': data_inicio,
         'data_fim': data_fim,
         'nome_evento': nome_evento,
         'somente_nao_baixados': '1' if somente_nao_baixados else '',
     })
+
 
 @login_required
 @transaction.atomic
@@ -1705,12 +1732,10 @@ def marcar_evento_baixado(request, evento_id):
     if request.method != 'POST':
         return redirect('relatorio_eventos')
 
-    # opcional: garantir que só quem tem permissão de relatórios pode marcar
     if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='relatorios').exists():
         messages.error(request, "Você não tem permissão para marcar baixa.")
         return redirect('relatorio_eventos')
 
-    # lock de linha para evitar duplo clique simultâneo
     evento = (Evento.objects.select_for_update()
               .select_related('baixado_por')
               .filter(id=evento_id).first())
@@ -1761,8 +1786,6 @@ def desmarcar_evento_baixado(request, evento_id):
     evento.baixado_estoque = False
     evento.baixado_por = None
     evento.baixado_em = None
-    # mantém a observação anterior ou limpe, como preferir:
-    # evento.baixado_obs = ""
     evento.save()
 
     messages.success(request, "Marca de baixa removida.")
@@ -1991,7 +2014,12 @@ def relatorio_perdas(request):
 #                                                                                     SEÇÃO DE EXPORTAÇÃO DE EXPORTAÇÃO EXCEL
 
 
-def _auto_fit(ws, min_w=10, max_w=45):
+# ===================== Helpers =====================
+
+DOSE_ML = Decimal("50")  # ml por dose
+
+def auto_fit(ws, min_w=10, max_w=45):
+    """Ajusta a largura das colunas pelo maior conteúdo renderizado."""
     for col in ws.columns:
         length = 0
         idx = col[0].column
@@ -2000,27 +2028,36 @@ def _auto_fit(ws, min_w=10, max_w=45):
             length = max(length, len(s))
         ws.column_dimensions[get_column_letter(idx)].width = max(min_w, min(max_w, length + 2))
 
-def _style_header(row, fill_color="F1F5FF"):
+def style_header_row(ws, row_idx, fill_color="F1F5FF"):
+    """Aplica estilo de cabeçalho na linha indicada (ws[row_idx])."""
     fill = PatternFill("solid", fgColor=fill_color)
-    border = Border(left=Side(style="thin", color="DDDDDD"),
-                    right=Side(style="thin", color="DDDDDD"),
-                    top=Side(style="thin", color="DDDDDD"),
-                    bottom=Side(style="thin", color="DDDDDD"))
-    for c in row:
+    border = Border(
+        left=Side(style="thin", color="DDDDDD"),
+        right=Side(style="thin", color="DDDDDD"),
+        top=Side(style="thin", color="DDDDDD"),
+        bottom=Side(style="thin", color="DDDDDD"),
+    )
+    for c in ws[row_idx]:
         c.font = Font(bold=True)
         c.alignment = Alignment(horizontal="center", vertical="center")
         c.fill = fill
         c.border = border
+    ws.row_dimensions[row_idx].height = 20
 
-def _style_body_borders(ws, r1, r2, c1, c2):
+def style_body_borders(ws, r1, r2, c1, c2):
     """Borda fininha no corpo da tabela (inclusive totais)."""
-    border = Border(left=Side(style="thin", color="EEEEEE"),
-                    right=Side(style="thin", color="EEEEEE"),
-                    top=Side(style="thin", color="EEEEEE"),
-                    bottom=Side(style="thin", color="EEEEEE"))
+    border = Border(
+        left=Side(style="thin", color="EEEEEE"),
+        right=Side(style="thin", color="EEEEEE"),
+        top=Side(style="thin", color="EEEEEE"),
+        bottom=Side(style="thin", color="EEEEEE"),
+    )
     for r in range(r1, r2 + 1):
         for c in range(c1, c2 + 1):
             ws.cell(row=r, column=c).border = border
+
+
+# ===================== View =====================
 
 @login_required
 def exportar_relatorio_eventos_excel(request):
@@ -2040,67 +2077,114 @@ def exportar_relatorio_eventos_excel(request):
         data_inicio = date.today().replace(day=1)
         data_fim = date.today()
 
-    eventos_qs = Evento.objects.filter(
-        data_criacao__date__range=(data_inicio, data_fim)
-    ).order_by('-data_criacao')
+    eventos_qs = (
+        Evento.objects
+        .filter(data_criacao__date__range=(data_inicio, data_fim))
+        .prefetch_related('produtos__produto', 'alimentos__alimento')
+        .select_related('responsavel')
+        .order_by('-data_criacao')
+    )
     if nome_evento:
         eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
 
-    # Consolidação e detalhamento
-    consolidado = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
-    detalhado = []
-    eventos_group = []  # para a aba "Por Evento"
+    # Consolidações
+    consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
+    consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
+
+    # Linhas detalhadas (uma por item)
+    detalhado = []  # cada linha terá: evento, data, pessoas, horas, tipo, item, garrafas, doses, ml, quantidade, unidade
+
+    # Agrupado por evento para a aba "Por Evento"
+    eventos_group = []
 
     for ev in eventos_qs:
         total_g = 0
         total_d = Decimal('0')
         total_ml = Decimal('0')
-        itens_ev = []
+        itens_ev_bebidas = []
+        itens_ev_alimentos = []
 
+        # ---- Bebidas
         for item in ev.produtos.all():
             prod = item.produto.nome
             gar = int(item.garrafas or 0)
             dos = Decimal(item.doses or 0)
-            ml  = dos * DOSE_ML
+            ml = dos * DOSE_ML
 
-            # consolidado
-            consolidado[prod]['garrafas'] += gar
-            consolidado[prod]['doses'] += dos
-            consolidado[prod]['ml'] += ml
+            # Consolida
+            consolidado_bebidas[prod]['garrafas'] += gar
+            consolidado_bebidas[prod]['doses'] += dos
+            consolidado_bebidas[prod]['ml'] += ml
 
-            # detalhado geral
+            # Detalhado
             detalhado.append({
                 'evento': ev.nome,
                 'data': localtime(ev.data_criacao),
-                'produto': prod,
+                'pessoas': ev.numero_pessoas,
+                'horas': ev.horas,
+                'tipo': 'Bebida',
+                'item': prod,
                 'garrafas': gar,
                 'doses': dos,
                 'ml': ml,
+                'quantidade': None,
+                'unidade': None,
             })
 
-            # por evento
-            itens_ev.append({'produto': prod, 'garrafas': gar, 'doses': dos, 'ml': ml})
+            # Por evento
+            itens_ev_bebidas.append({'produto': prod, 'garrafas': gar, 'doses': dos, 'ml': ml})
             total_g += gar
             total_d += dos
             total_ml += ml
+
+        # ---- Alimentos
+        for ali in ev.alimentos.all():
+            nome = ali.alimento.nome
+            qtd = Decimal(ali.quantidade or 0)
+            uni = ali.alimento.unidade or ''
+
+            # Consolida
+            consolidado_alimentos[nome]['quantidade'] += qtd
+            consolidado_alimentos[nome]['unidade'] = uni
+
+            # Detalhado
+            detalhado.append({
+                'evento': ev.nome,
+                'data': localtime(ev.data_criacao),
+                'pessoas': ev.numero_pessoas,
+                'horas': ev.horas,
+                'tipo': 'Alimento',
+                'item': nome,
+                'garrafas': None,
+                'doses': None,
+                'ml': None,
+                'quantidade': qtd,
+                'unidade': uni,
+            })
+
+            # Por evento
+            itens_ev_alimentos.append({'alimento': nome, 'quantidade': qtd, 'unidade': uni})
 
         eventos_group.append({
             'nome': ev.nome,
             'data': localtime(ev.data_criacao),
             'responsavel': getattr(ev, 'responsavel', ''),
-            'itens': itens_ev,
-            'totais': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
+            'pessoas': ev.numero_pessoas,
+            'horas': ev.horas,
+            'itens_bebidas': itens_ev_bebidas,
+            'totais_bebidas': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
+            'itens_alimentos': itens_ev_alimentos,
         })
 
-    # Workbook
+    # === Workbook
     wb = Workbook()
 
-    # === Aba 1: Consolidado ===
+    # ===================== Aba 1: Consolidado Bebidas =====================
     ws1 = wb.active
-    ws1.title = "Consolidado"
+    ws1.title = "Consolidado Bebidas"
 
     ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
-    ws1.cell(row=1, column=1, value="Relatório de Eventos — Consolidado por Produto").font = Font(bold=True, size=14)
+    ws1.cell(row=1, column=1, value="Relatório de Eventos — Consolidado de Bebidas").font = Font(bold=True, size=14)
 
     filtro_txt = f"Período: {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
     if nome_evento:
@@ -2110,12 +2194,12 @@ def exportar_relatorio_eventos_excel(request):
 
     ws1.append([])
     ws1.append(["Produto", "Garrafas", "Doses", "Doses (ML)"])
-    _style_header(ws1[4])
+    style_header_row(ws1, 4)
 
     r = 5
     tot_g, tot_d, tot_ml = 0, Decimal('0'), Decimal('0')
-    for prod in sorted(consolidado.keys(), key=lambda s: s.lower()):
-        d = consolidado[prod]
+    for prod in sorted(consolidado_bebidas.keys(), key=lambda s: s.lower()):
+        d = consolidado_bebidas[prod]
         ws1.cell(row=r, column=1, value=prod)
         ws1.cell(row=r, column=2, value=int(d['garrafas'])).number_format = "0"
         ws1.cell(row=r, column=3, value=float(d['doses'])).number_format = "0.00"
@@ -2129,42 +2213,99 @@ def exportar_relatorio_eventos_excel(request):
     ws1.cell(row=r, column=4, value=float(tot_ml)).number_format = "0.00"
 
     ws1.freeze_panes = "A5"
-    _style_body_borders(ws1, 5, r, 1, 4)
-    _auto_fit(ws1)
+    style_body_borders(ws1, 5, r, 1, 4)
+    auto_fit(ws1)
 
-    # === Aba 2: Detalhado ===
+    # ===================== Aba 2: Consolidado Alimentos =====================
+    wsA = wb.create_sheet("Consolidado Alimentos")
+
+    wsA.merge_cells(start_row=1, start_column=1, end_row=1, end_column=3)
+    wsA.cell(row=1, column=1, value="Relatório de Eventos — Consolidado de Alimentos").font = Font(bold=True, size=14)
+
+    wsA.merge_cells(start_row=2, start_column=1, end_row=2, end_column=3)
+    wsA.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
+
+    wsA.append([])
+    wsA.append(["Alimento", "Quantidade", "Unidade"])
+    style_header_row(wsA, 4)
+
+    rA = 5
+    for ali in sorted(consolidado_alimentos.keys(), key=lambda s: s.lower()):
+        d = consolidado_alimentos[ali]
+        wsA.cell(row=rA, column=1, value=ali)
+        wsA.cell(row=rA, column=2, value=float(d['quantidade'])).number_format = "0.00"
+        wsA.cell(row=rA, column=3, value=d['unidade'])
+        rA += 1
+
+    wsA.freeze_panes = "A5"
+    style_body_borders(wsA, 5, rA - 1, 1, 3)
+    auto_fit(wsA)
+
+    # ===================== Aba 3: Detalhado =====================
     ws2 = wb.create_sheet("Detalhado")
-    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
-    ws2.cell(row=1, column=1, value="Relatório de Eventos — Detalhado por Item").font = Font(bold=True, size=14)
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
+    ws2.cell(row=1, column=1, value="Relatório de Eventos — Detalhado (Bebidas e Alimentos)").font = Font(bold=True, size=14)
 
-    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=6)
+    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=11)
     ws2.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
 
     ws2.append([])
-    ws2.append(["Evento", "Data", "Produto", "Garrafas", "Doses", "Doses (ML)"])
-    _style_header(ws2[4])
+    ws2.append([
+        "Evento", "Data", "Pessoas", "Horas", "Tipo", "Item",
+        "Garrafas", "Doses", "Doses (ML)", "Quantidade", "Unidade"
+    ])
+    style_header_row(ws2, 4)
 
     r2 = 5
     for linha in detalhado:
         ws2.cell(row=r2, column=1, value=linha['evento'])
         ws2.cell(row=r2, column=2, value=linha['data'].strftime("%d/%m/%Y %H:%M"))
-        ws2.cell(row=r2, column=3, value=linha['produto'])
-        ws2.cell(row=r2, column=4, value=int(linha['garrafas'])).number_format = "0"
-        ws2.cell(row=r2, column=5, value=float(linha['doses'])).number_format = "0.00"
-        ws2.cell(row=r2, column=6, value=float(linha['ml'])).number_format = "0.00"
+
+        # Pessoas
+        if linha['pessoas'] is not None:
+            ws2.cell(row=r2, column=3, value=int(linha['pessoas'])).number_format = "0"
+        else:
+            ws2.cell(row=r2, column=3, value=None)
+
+        # Horas
+        if linha['horas'] is not None:
+            try:
+                ws2.cell(row=r2, column=4, value=float(linha['horas'])).number_format = "0.00"
+            except Exception:
+                ws2.cell(row=r2, column=4, value=None)
+        else:
+            ws2.cell(row=r2, column=4, value=None)
+
+        ws2.cell(row=r2, column=5, value=linha['tipo'])
+        ws2.cell(row=r2, column=6, value=linha['item'])
+
+        # Bebidas
+        if linha['garrafas'] is not None:
+            ws2.cell(row=r2, column=7, value=int(linha['garrafas'])).number_format = "0"
+        if linha['doses'] is not None:
+            ws2.cell(row=r2, column=8, value=float(linha['doses'])).number_format = "0.00"
+        if linha['ml'] is not None:
+            ws2.cell(row=r2, column=9, value=float(linha['ml'])).number_format = "0.00"
+
+        # Alimentos
+        if linha['quantidade'] is not None:
+            ws2.cell(row=r2, column=10, value=float(linha['quantidade'])).number_format = "0.00"
+        if linha['unidade'] is not None:
+            ws2.cell(row=r2, column=11, value=linha['unidade'])
+
         r2 += 1
 
     ws2.freeze_panes = "A5"
-    _style_body_borders(ws2, 5, r2 - 1, 1, 6)
-    _auto_fit(ws2)
+    style_body_borders(ws2, 5, r2 - 1, 1, 11)
+    auto_fit(ws2)
 
-    # === Aba 3: Por Evento ===
+    # ===================== Aba 4: Por Evento =====================
     ws3 = wb.create_sheet("Por Evento")
 
-    col_count = 6  # vamos usar 6 colunas
+    col_count = 8
     current_row = 1
 
-    # título geral
+    # Título geral
     ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
     ws3.cell(row=current_row, column=1, value="Relatório de Eventos — Por Evento").font = Font(bold=True, size=14)
     current_row += 1
@@ -2172,47 +2313,73 @@ def exportar_relatorio_eventos_excel(request):
     ws3.cell(row=current_row, column=1, value=filtro_txt).font = Font(italic=True, size=11)
     current_row += 2  # linha em branco
 
-    # para cada evento, um bloco
     for ev in eventos_group:
-        # Cabeçalho do bloco
+        # Cabeçalho do bloco (com Pessoas/Horas)
         ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
-        ws3.cell(row=current_row, column=1,
-                 value=f"Evento: {ev['nome']}  |  Data: {ev['data'].strftime('%d/%m/%Y %H:%M')}"
-                       + (f"  |  Resp.: {ev['responsavel']}" if ev['responsavel'] else "")
-                 ).font = Font(bold=True, size=12)
+        cab = f"Evento: {ev['nome']}  |  Data: {ev['data'].strftime('%d/%m/%Y %H:%M')}"
+        if ev['responsavel']:
+            cab += f"  |  Resp.: {ev['responsavel']}"
+        if ev.get('pessoas') is not None:
+            cab += f"  |  Pessoas: {ev['pessoas']}"
+        if ev.get('horas') is not None:
+            try:
+                cab += f"  |  Horas: {float(ev['horas']):.2f}"
+            except Exception:
+                cab += "  |  Horas: -"
+        ws3.cell(row=current_row, column=1, value=cab).font = Font(bold=True, size=12)
         current_row += 1
 
-        # Cabeçalho da tabela do evento
+        # ===== Tabela Bebidas =====
         ws3.append([])
         current_row += 1
-        ws3.append(["Produto", "Garrafas", "Doses", "Doses (ML)", "", ""])
-        _style_header(ws3[current_row])
-        first_data = current_row + 1
+        ws3.append(["🍹 Bebidas", "", "", "", "", "", "", ""])
+        style_header_row(ws3, current_row)
+        current_row += 1
+        ws3.append(["Produto", "Garrafas", "Doses", "Doses (ML)", "", "", "", ""])
+        style_header_row(ws3, current_row)
+        first_data_beb = current_row + 1
 
-        # Linhas do evento
-        for it in ev['itens']:
+        for it in ev['itens_bebidas']:
             current_row += 1
             ws3.cell(row=current_row, column=1, value=it['produto'])
             ws3.cell(row=current_row, column=2, value=int(it['garrafas'])).number_format = "0"
             ws3.cell(row=current_row, column=3, value=float(it['doses'])).number_format = "0.00"
             ws3.cell(row=current_row, column=4, value=float(it['ml'])).number_format = "0.00"
 
-        # Subtotal do evento
+        # Subtotal bebidas
         current_row += 1
-        ws3.cell(row=current_row, column=1, value="Subtotal do evento").font = Font(bold=True)
-        ws3.cell(row=current_row, column=2, value=int(ev['totais']['garrafas'])).number_format = "0"
-        ws3.cell(row=current_row, column=3, value=float(ev['totais']['doses'])).number_format = "0.00"
-        ws3.cell(row=current_row, column=4, value=float(ev['totais']['ml'])).number_format = "0.00"
+        ws3.cell(row=current_row, column=1, value="Subtotal (bebidas)").font = Font(bold=True)
+        ws3.cell(row=current_row, column=2, value=int(ev['totais_bebidas']['garrafas'])).number_format = "0"
+        ws3.cell(row=current_row, column=3, value=float(ev['totais_bebidas']['doses'])).number_format = "0.00"
+        ws3.cell(row=current_row, column=4, value=float(ev['totais_bebidas']['ml'])).number_format = "0.00"
+        style_body_borders(ws3, first_data_beb, current_row, 1, 4)
 
-        # borda no bloco (tabela + subtotal)
-        _style_body_borders(ws3, first_data, current_row, 1, 4)
+        # ===== Tabela Alimentos =====
+        current_row += 2
+        ws3.append(["🍽️ Alimentos", "", "", "", "", "", "", ""])
+        style_header_row(ws3, current_row)
+        current_row += 1
+        ws3.append(["Alimento", "Quantidade", "Unidade", "", "", "", "", ""])
+        style_header_row(ws3, current_row)
+        first_data_ali = current_row + 1
 
-        # Espaçamento entre eventos
+        if ev['itens_alimentos']:
+            for it in ev['itens_alimentos']:
+                current_row += 1
+                ws3.cell(row=current_row, column=1, value=it['alimento'])
+                ws3.cell(row=current_row, column=2, value=float(it['quantidade'])).number_format = "0.00"
+                ws3.cell(row=current_row, column=3, value=it['unidade'])
+            style_body_borders(ws3, first_data_ali, current_row, 1, 3)
+        else:
+            current_row += 1
+            ws3.cell(row=current_row, column=1, value="Sem lançamentos de alimentos.").font = Font(italic=True)
+
+        # Espaço entre eventos
         current_row += 2
 
-    _auto_fit(ws3)
+    auto_fit(ws3)
 
-    # Output
+    # === Output
     output = BytesIO()
     wb.save(output)
     output.seek(0)
@@ -2224,6 +2391,7 @@ def exportar_relatorio_eventos_excel(request):
     )
     resp['Content-Disposition'] = f'attachment; filename="{fname}"'
     return resp
+
 
 
 
