@@ -1736,10 +1736,10 @@ def marcar_evento_baixado(request, evento_id):
         messages.error(request, "Você não tem permissão para marcar baixa.")
         return redirect('relatorio_eventos')
 
-    evento = (Evento.objects.select_for_update()
-              .select_related('baixado_por')
-              .filter(id=evento_id).first())
-    if not evento:
+    # ✅ Lock apenas na tabela do Evento (sem joins)
+    try:
+        evento = Evento.objects.select_for_update().get(id=evento_id)
+    except Evento.DoesNotExist:
         messages.error(request, "Evento não encontrado.")
         return redirect('relatorio_eventos')
 
@@ -1748,7 +1748,7 @@ def marcar_evento_baixado(request, evento_id):
         return redirect('relatorio_eventos')
 
     if evento.baixado_estoque:
-        who = getattr(evento.baixado_por, 'username', 'alguém')
+        who = getattr(evento.baixado_por, 'username', 'alguém') if evento.baixado_por_id else 'alguém'
         when = timezone.localtime(evento.baixado_em).strftime('%d/%m %H:%M') if evento.baixado_em else ''
         messages.info(request, f"Este evento já estava marcado como baixado ({who} em {when}).")
         return redirect('relatorio_eventos')
@@ -1764,6 +1764,7 @@ def marcar_evento_baixado(request, evento_id):
     return redirect('relatorio_eventos')
 
 
+
 @login_required
 @transaction.atomic
 def desmarcar_evento_baixado(request, evento_id):
@@ -1774,8 +1775,9 @@ def desmarcar_evento_baixado(request, evento_id):
         messages.error(request, "Você não tem permissão para desmarcar baixa.")
         return redirect('relatorio_eventos')
 
-    evento = Evento.objects.select_for_update().filter(id=evento_id).first()
-    if not evento:
+    try:
+        evento = Evento.objects.select_for_update().get(id=evento_id)  # ✅ sem select_related
+    except Evento.DoesNotExist:
         messages.error(request, "Evento não encontrado.")
         return redirect('relatorio_eventos')
 
@@ -1786,10 +1788,12 @@ def desmarcar_evento_baixado(request, evento_id):
     evento.baixado_estoque = False
     evento.baixado_por = None
     evento.baixado_em = None
+    # evento.baixado_obs = ""  # se quiser limpar
     evento.save()
 
     messages.success(request, "Marca de baixa removida.")
     return redirect('relatorio_eventos')
+
 
 
 
@@ -2356,7 +2360,7 @@ def exportar_relatorio_eventos_excel(request):
 
         # ===== Tabela Alimentos =====
         current_row += 2
-        ws3.append(["🍽️ Alimentos", "", "", "", "", "", "", ""])
+        ws3.append([])
         style_header_row(ws3, current_row)
         current_row += 1
         ws3.append(["Alimento", "Quantidade", "Unidade", "", "", "", "", ""])
