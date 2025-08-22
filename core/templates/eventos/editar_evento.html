@@ -21,6 +21,23 @@
   <form method="post">
     {% csrf_token %}
 
+
+  <!-- ✅ EDITAR HORAS DO EVENTO -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-4">
+      <label class="form-label">Horas do evento</label>
+      <input
+        name="horas_evento"
+        type="number"
+        min="0"
+        step="0.5"
+        class="form-control"
+        value="{% if evento.horas %}{{ evento.horas|floatformat:'1' }}{% endif %}"
+        placeholder="ex.: 4 ou 3,5">
+      <div class="form-text">Aceita frações (ex.: 3,5h). Use vírgula ou ponto.</div>
+    </div>
+  </div>
+
     <!-- BEBIDAS EXISTENTES -->
     <h5 class="mt-4">🍾 Bebidas</h5>
     <div class="table-responsive">

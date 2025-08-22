@@ -823,7 +823,27 @@ def editar_evento(request, evento_id):
         return redirect('pagina_eventos')
 
     if request.method == 'POST':
-        # Atualiza quantidades dos itens existentes
+        # ✅ HORAS DO EVENTO (editar) — só atualiza se o campo vier preenchido
+        horas_raw = (request.POST.get('horas_evento') or '').strip()
+
+        update_fields = []
+
+        if horas_raw != '':  # ← se deixou em branco, não mexe no valor já salvo
+            try:
+                horas_val = Decimal(horas_raw.replace(',', '.'))
+                if horas_val < 0:
+                    raise InvalidOperation
+                evento.horas = horas_val
+                update_fields.append('horas')
+            except (InvalidOperation, ValueError):
+                # Se inválido, ignore (ou você pode adicionar uma mensagem de erro se preferir)
+                pass
+
+        if update_fields:
+            evento.save(update_fields=update_fields)
+
+
+        # ---------- Atualiza quantidades dos itens existentes ----------
         for ep in evento.produtos.all():
             g = request.POST.get(f'prod_g_{ep.id}', '').strip()
             d = request.POST.get(f'prod_d_{ep.id}', '').strip()
@@ -833,7 +853,6 @@ def editar_evento(request, evento_id):
             except: ep.doses = 0
             ep.save()
 
-        from decimal import Decimal, InvalidOperation
         for ea in evento.alimentos.all():
             q = request.POST.get(f'ali_q_{ea.id}', '').strip().replace(',', '.')
             try:
@@ -843,7 +862,7 @@ def editar_evento(request, evento_id):
                 ea.quantidade = Decimal('0')
             ea.save()
 
-        # Adicionar novos itens (opcionais)
+        # ---------- Adicionar novos itens (opcionais) ----------
         novo_prod = request.POST.get('novo_produto')
         novo_g = request.POST.get('novo_garrafas')
         novo_d = request.POST.get('novo_doses')
@@ -857,22 +876,21 @@ def editar_evento(request, evento_id):
                 pass
 
         novo_ali = request.POST.get('novo_alimento')
-        novo_q = request.POST.get('novo_qtd', '').replace(',', '.')
+        novo_q = (request.POST.get('novo_qtd') or '').replace(',', '.')
         if novo_ali:
             try:
                 a = Alimento.objects.get(id=novo_ali)
-                from decimal import Decimal
                 qv = Decimal(novo_q or '0')
                 EventoAlimento.objects.create(evento=evento, alimento=a, quantidade=max(qv, Decimal('0')))
             except Exception:
                 pass
 
-        # Finalização?
+        # ---------- Finalização? ----------
         if 'finalizar' in request.POST:
             evento.status = 'FINALIZADO'
             evento.finalizado_em = timezone.now()
             evento.supervisor_finalizou = request.user
-            evento.save()
+            evento.save(update_fields=['status', 'finalizado_em', 'supervisor_finalizou'])
             messages.success(request, "Evento finalizado. Ele agora aparece no consolidado/Excel.")
             return redirect('pagina_eventos')
 
