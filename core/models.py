@@ -243,7 +243,7 @@ class Alimento(models.Model):
         ('l', 'Litro'),
         ('ml', 'Mililitro'),
     )
-    nome = models.CharField(max_length=120)
+    nome = models.CharField(max_length=255)
     codigo = models.CharField(max_length=30, unique=True)  # usado no autocomplete
     unidade = models.CharField(max_length=10, choices=UNIDADE_CHOICES, default='un')
     ativo = models.BooleanField(default=True)

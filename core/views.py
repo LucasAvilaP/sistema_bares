@@ -7,6 +7,8 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.views.decorators.http import require_POST
 from itertools import zip_longest
+from datetime import time
+from django.core.paginator import Paginator
 from django.db import transaction
 import uuid
 import pandas as pd
@@ -622,36 +624,49 @@ def historico_transferencias_view(request):
 
 @login_required
 def pagina_eventos(request):
-    # 🔒 Permissão
     if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='eventos').exists():
         messages.error(request, "Você não tem permissão para acessar a página de eventos.")
         return redirect('dashboard')
 
     hoje = timezone.localdate()
 
+    # ✅ TRAGA TODOS OS QUE NÃO ESTÃO FINALIZADOS (qualquer data)
     eventos_abertos = (
-        Evento.objects.filter(data_evento=hoje, status='ABERTO')
+        Evento.objects
+        .exclude(status='FINALIZADO')   # em vez de .filter(status='ABERTO')
         .prefetch_related('produtos__produto', 'alimentos__alimento')
-        .order_by('-data_criacao')
+        .order_by('data_evento', 'data_criacao')
     )
-    eventos_finalizados = (
-        Evento.objects.filter(data_evento=hoje, status='FINALIZADO')
+
+    # ✅ Paginação
+    paginator = Paginator(eventos_abertos, 10)  # 10 por página
+    page_number = request.GET.get("page")
+    eventos_abertos = paginator.get_page(page_number)
+
+    # ✅ Consolidado: FINALIZADOS "hoje após 06:00"
+    tz = timezone.get_current_timezone()
+    start_dt = timezone.make_aware(datetime.combine(hoje, time(6, 0)), tz)
+    end_dt   = timezone.make_aware(datetime.combine(hoje, time(23, 59, 59, 999999)), tz)
+
+    finalizados_apos_seis = (
+        Evento.objects.filter(status='FINALIZADO', finalizado_em__range=(start_dt, end_dt))
         .prefetch_related('produtos__produto', 'alimentos__alimento')
         .order_by('-finalizado_em')
     )
 
-    # ✅ Consolidado do dia considera apenas FINALIZADOS de hoje
     consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': 0, 'ml': 0})
     consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
 
-    for evento in eventos_finalizados:
+    for evento in finalizados_apos_seis:
         for item in evento.produtos.all():
-            consolidado_bebidas[item.produto.nome]['garrafas'] += item.garrafas
-            consolidado_bebidas[item.produto.nome]['doses'] += item.doses
-            consolidado_bebidas[item.produto.nome]['ml'] += item.doses * 50  # 50 ml por dose
+            g = int(item.garrafas or 0)
+            d = int(item.doses or 0)
+            consolidado_bebidas[item.produto.nome]['garrafas'] += g
+            consolidado_bebidas[item.produto.nome]['doses'] += d
+            consolidado_bebidas[item.produto.nome]['ml']    += d * 50
         for item in evento.alimentos.all():
             nome = item.alimento.nome
-            consolidado_alimentos[nome]['quantidade'] += item.quantidade
+            consolidado_alimentos[nome]['quantidade'] += (item.quantidade or Decimal('0'))
             consolidado_alimentos[nome]['unidade'] = item.alimento.unidade
 
     produtos = Produto.objects.all().order_by('nome')
@@ -661,11 +676,13 @@ def pagina_eventos(request):
         'produtos': produtos,
         'alimentos': alimentos,
         'eventos_abertos': eventos_abertos,
-        'eventos_finalizados': eventos_finalizados,
+        'paginator': paginator,
         'consolidado_bebidas': dict(consolidado_bebidas),
         'consolidado_alimentos': dict(consolidado_alimentos),
         'hoje': hoje,
+        'janela_consolidado_label': "Finalizados hoje após 06:00",
     })
+
 
 
 def _to_int_or_zero(val):
@@ -697,8 +714,9 @@ def criar_evento(request):
     nome = (request.POST.get('nome_evento') or '').strip()
     pessoas_raw = (request.POST.get('numero_pessoas') or '').strip()
     horas_raw = (request.POST.get('horas') or '').strip()
+    data_evento_raw = (request.POST.get('data_evento') or '').strip()
 
-    # numero_pessoas (aceita None)
+    # numero_pessoas
     try:
         numero_pessoas = int(pessoas_raw) if pessoas_raw != '' else None
         if numero_pessoas is not None and numero_pessoas < 0:
@@ -706,7 +724,7 @@ def criar_evento(request):
     except ValueError:
         numero_pessoas = None
 
-    # horas (aceita fração e None)
+    # horas
     try:
         horas = Decimal(horas_raw.replace(',', '.')) if horas_raw != '' else None
         if horas is not None and horas < 0:
@@ -714,14 +732,22 @@ def criar_evento(request):
     except Exception:
         horas = None
 
-    # cria o evento "em branco" para ser preenchido depois
+    # data_evento (se não vier, usa hoje)
+    try:
+        if data_evento_raw:
+            data_evento = datetime.strptime(data_evento_raw, "%Y-%m-%d").date()
+        else:
+            data_evento = timezone.localdate()
+    except Exception:
+        data_evento = timezone.localdate()
+
     evento = Evento.objects.create(
         nome=nome or f"Evento {timezone.localtime(timezone.now()):%d/%m %H:%M}",
         responsavel=request.user,
         numero_pessoas=numero_pessoas,
         horas=horas,
         status='ABERTO',
-        data_evento=timezone.localdate(),
+        data_evento=data_evento,
     )
 
     # ---------- Bebidas (podem ser zero) ----------

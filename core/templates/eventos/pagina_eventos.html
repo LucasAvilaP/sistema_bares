@@ -12,15 +12,20 @@
     {% endfor %}
   {% endif %}
 
-  <!-- FORMULÁRIO: CADASTRAR EVENTO (não finaliza) -->
+  <!-- ===================== FORMULÁRIO: CADASTRAR EVENTO (não finaliza) ===================== -->
   <form method="post" action="{% url 'criar_evento' %}" id="evento-form">
     {% csrf_token %}
+
     <div class="mb-3">
       <label class="form-label">Nome do Evento:</label>
       <input type="text" class="form-control" name="nome_evento" required>
     </div>
 
     <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label">Data do evento (opcional)</label>
+        <input type="date" name="data_evento" class="form-control" value="{{ hoje|date:'Y-m-d' }}">
+      </div>
       <div class="col-md-4">
         <label class="form-label">Nº de pessoas</label>
         <input type="number" name="numero_pessoas" class="form-control" min="1" step="1" placeholder="ex.: 80">
@@ -39,8 +44,7 @@
         <select class="form-select select2" id="produto-select">
           <option value="">Selecione</option>
           {% for produto in produtos %}
-            <option value="{{ produto.id }}"
-                    data-codigo="{{ produto.codigo|default_if_none:'' }}">
+            <option value="{{ produto.id }}" data-codigo="{{ produto.codigo|default_if_none:'' }}">
               {{ produto.nome }}
             </option>
           {% endfor %}
@@ -55,12 +59,10 @@
         <input type="number" class="form-control" id="doses" min="0" value="0">
       </div>
       <div class="col-md-2">
-        <!-- placeholder para igualar a altura do label acima -->
         <label class="form-label d-none d-md-block">&nbsp;</label>
         <button type="button" class="btn btn-success w-100" onclick="adicionarProduto()">➕ Adicionar</button>
       </div>
     </div>
-
 
     <!-- LISTA TEMPORÁRIA BEBIDAS -->
     <div id="lista-produtos" class="mb-4"></div>
@@ -68,34 +70,30 @@
     <hr>
 
     <!-- ====================== ALIMENTOS ====================== -->
-<div class="row g-3 align-items-end mb-3">
-  <div class="col-md-6">
-    <label class="form-label">Alimento</label>
-    <select class="form-select select2-code" id="alimento-select" title="Pesquise por nome ou código">
-      <option value="">Selecione</option>
-      {% for a in alimentos %}
-        <option value="{{ a.id }}" data-codigo="{{ a.codigo }}" data-unidade="{{ a.get_unidade_display }}">
-          {{ a.nome }}
-        </option>
-      {% endfor %}
-    </select>
-  </div>
+    <div class="row g-3 align-items-end mb-3">
+      <div class="col-md-6">
+        <label class="form-label">Alimento</label>
+        <select class="form-select select2-code" id="alimento-select" title="Pesquise por nome ou código">
+          <option value="">Selecione</option>
+          {% for a in alimentos %}
+            <option value="{{ a.id }}" data-codigo="{{ a.codigo }}" data-unidade="{{ a.get_unidade_display }}">
+              {{ a.nome }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
 
-  <div class="col-md-4">
-    <label class="form-label">Quantidade</label>
-    <input type="number" class="form-control" id="alimento-qtd" min="0" step="0.01" value="0" placeholder="ex.: 2,50">
-    <!-- mantém um espaço de ajuda para igualar alturas -->
-    <div class="form-text equalize-hint" id="hint-unidade" style="display:none;"></div>
-  </div>
+      <div class="col-md-4">
+        <label class="form-label">Quantidade</label>
+        <input type="number" class="form-control" id="alimento-qtd" min="0" step="0.01" value="0" placeholder="ex.: 2,50">
+        <div class="form-text equalize-hint" id="hint-unidade" style="display:none;"></div>
+      </div>
 
-  <div class="col-md-2">
-    <!-- placeholder de ajuda para alinhar com as outras colunas -->
-    <div class="form-text equalize-hint d-none d-md-block">&nbsp;</div>
-    <button type="button" class="btn btn-success w-100" onclick="adicionarAlimento()">➕ Adicionar</button>
-  </div>
-</div>
-
-
+      <div class="col-md-2">
+        <div class="form-text equalize-hint d-none d-md-block">&nbsp;</div>
+        <button type="button" class="btn btn-success w-100" onclick="adicionarAlimento()">➕ Adicionar</button>
+      </div>
+    </div>
 
     <!-- LISTA TEMPORÁRIA ALIMENTOS -->
     <div id="lista-alimentos" class="mb-3"></div>
@@ -107,13 +105,13 @@
 
   <hr class="my-5">
 
-  <!-- EXPORTAÇÃO -->
+  <!-- ====================== EXPORTAÇÃO ====================== -->
   <a href="{% url 'exportar_consolidado_eventos_excel' %}" class="btn btn-outline-success mb-3">
     📤 Exportar Consolidado para Excel
   </a>
 
-  <!-- CONSOLIDADO DO DIA - BEBIDAS (somente FINALIZADOS de hoje) -->
-  <h4 class="mb-3">🍾 Consolidado do Dia (Bebidas) — Finalizados {{ hoje|date:"d/m" }}</h4>
+  <!-- ====================== CONSOLIDADO DO DIA ====================== -->
+  <h4 class="mb-3">🍾 Consolidado do Dia (Bebidas) — {{ janela_consolidado_label }}</h4>
   <table class="table table-bordered bg-white mb-5">
     <thead class="table-light">
       <tr>
@@ -129,13 +127,12 @@
         <td>{{ dados.ml }} ml</td>
       </tr>
       {% empty %}
-      <tr><td colspan="4" class="text-center text-muted">Sem registros finalizados hoje.</td></tr>
+      <tr><td colspan="4" class="text-center text-muted">Sem registros finalizados na janela.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 
-  <!-- CONSOLIDADO DO DIA - ALIMENTOS (somente FINALIZADOS de hoje) -->
-  <h4 class="mb-3">🍽️ Consolidado do Dia (Alimentos) — Finalizados {{ hoje|date:"d/m" }}</h4>
+  <h4 class="mb-3">🍽️ Consolidado do Dia (Alimentos) — {{ janela_consolidado_label }}</h4>
   <table class="table table-bordered bg-white">
     <thead class="table-light">
       <tr>
@@ -150,91 +147,105 @@
         <td>{{ dados.unidade }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="3" class="text-center text-muted">Sem registros finalizados hoje.</td></tr>
+      <tr><td colspan="3" class="text-center text-muted">Sem registros finalizados na janela.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 
   <hr class="my-5">
 
-  <!-- LISTAS DE EVENTOS -->
-  <h4 class="mb-3">📅 Eventos Abertos (hoje)</h4>
-  {% for evento in eventos_abertos %}
-    <div class="card mb-2">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <div>
-          <strong>{{ evento.nome }}</strong>
-          {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
-          {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
-          — criado {{ evento.data_criacao|date:"H:i" }} por {{ evento.responsavel }}
-        </div>
-        <div class="d-flex gap-2">
-          <a href="{% url 'editar_evento' evento.id %}" class="btn btn-sm btn-primary">Editar / Finalizar</a>
-          <form method="post" action="{% url 'excluir_evento' evento.id %}" onsubmit="return confirm('Excluir este evento?');">
-            {% csrf_token %}
-            <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
-          </form>
-        </div>
-      </div>
-      <div class="card-body">
-        {% if evento.produtos.all %}
-          <h6 class="text-muted">Bebidas</h6>
-          <ul class="mb-3">
-            {% for item in evento.produtos.all %}
-              <li>{{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-        {% if evento.alimentos.all %}
-          <h6 class="text-muted">Alimentos</h6>
-          <ul class="mb-0">
-            {% for item in evento.alimentos.all %}
-              <li>{{ item.alimento.nome }} — {{ item.quantidade }} {{ item.alimento.get_unidade_display }}</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      </div>
-    </div>
-  {% empty %}
-    <p class="text-muted">Nenhum evento aberto hoje.</p>
-  {% endfor %}
+  <!-- ====================== LISTA DE EVENTOS ABERTOS (com paginação) ====================== -->
+  <h4 class="mb-3">📅 Eventos Abertos</h4>
 
-  <h4 class="mb-3 mt-4">✅ Eventos Finalizados (hoje)</h4>
-  {% for evento in eventos_finalizados %}
-    <div class="card mb-2">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <div>
-          <strong>{{ evento.nome }}</strong>
-          {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
-          {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
-          — finalizado {{ evento.finalizado_em|date:"H:i" }} por {{ evento.supervisor_finalizou|default:"-" }}
+  {% if eventos_abertos %}
+    {% for evento in eventos_abertos %}
+      <div class="card mb-2">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>
+            <strong>{{ evento.nome }}</strong>
+            — 📆 {{ evento.data_evento|date:"d/m/Y" }}
+            {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
+            {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
+            — criado {{ evento.data_criacao|date:"d/m H:i" }} por {{ evento.responsavel }}
+          </div>
+          <div class="d-flex gap-2">
+            <a href="{% url 'editar_evento' evento.id %}" class="btn btn-sm btn-primary">Editar / Finalizar</a>
+            <form method="post" action="{% url 'excluir_evento' evento.id %}" onsubmit="return confirm('Excluir este evento?');">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-outline-danger">Excluir</button>
+            </form>
+          </div>
+        </div>
+        <div class="card-body">
+          {% if evento.produtos.all %}
+            <h6 class="text-muted">Bebidas</h6>
+            <ul class="mb-3">
+              {% for item in evento.produtos.all %}
+                <li>{{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if evento.alimentos.all %}
+            <h6 class="text-muted">Alimentos</h6>
+            <ul class="mb-0">
+              {% for item in evento.alimentos.all %}
+                <li>{{ item.alimento.nome }} — {{ item.quantidade }} {{ item.alimento.get_unidade_display }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
         </div>
       </div>
-      <div class="card-body">
-        {% if evento.produtos.all %}
-          <h6 class="text-muted">Bebidas</h6>
-          <ul class="mb-3">
-            {% for item in evento.produtos.all %}
-              <li>{{ item.produto.nome }} — {{ item.garrafas }} garrafas, {{ item.doses }} doses</li>
-            {% endfor %}
-          </ul>
+    {% endfor %}
+
+    <!-- ===== Paginação Bootstrap ===== -->
+    <nav aria-label="Navegação de páginas" class="mt-3">
+      <ul class="pagination">
+        {% if eventos_abertos.has_previous %}
+          <li class="page-item">
+            <a class="page-link" href="?page=1" aria-label="Primeira">&laquo;&laquo;</a>
+          </li>
+          <li class="page-item">
+            <a class="page-link" href="?page={{ eventos_abertos.previous_page_number }}" aria-label="Anterior">&laquo;</a>
+          </li>
+        {% else %}
+          <li class="page-item disabled"><span class="page-link">&laquo;&laquo;</span></li>
+          <li class="page-item disabled"><span class="page-link">&laquo;</span></li>
         {% endif %}
-        {% if evento.alimentos.all %}
-          <h6 class="text-muted">Alimentos</h6>
-          <ul class="mb-0">
-            {% for item in evento.alimentos.all %}
-              <li>{{ item.alimento.nome }} — {{ item.quantidade }} {{ item.alimento.get_unidade_display }}</li>
-            {% endfor %}
-          </ul>
+
+        {# janela de páginas ao redor da atual #}
+        {% for num in eventos_abertos.paginator.page_range %}
+          {% if num >= eventos_abertos.number|add:-2 and num <= eventos_abertos.number|add:2 %}
+            {% if num == eventos_abertos.number %}
+              <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+            {% else %}
+              <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+
+        {% if eventos_abertos.has_next %}
+          <li class="page-item">
+            <a class="page-link" href="?page={{ eventos_abertos.next_page_number }}" aria-label="Próxima">&raquo;</a>
+          </li>
+          <li class="page-item">
+            <a class="page-link" href="?page={{ eventos_abertos.paginator.num_pages }}" aria-label="Última">&raquo;&raquo;</a>
+          </li>
+        {% else %}
+          <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
+          <li class="page-item disabled"><span class="page-link">&raquo;&raquo;</span></li>
         {% endif %}
+      </ul>
+      <div class="text-muted small">
+        Página {{ eventos_abertos.number }} de {{ eventos_abertos.paginator.num_pages }}
+        — total de {{ eventos_abertos.paginator.count }} evento(s) aberto(s).
       </div>
-    </div>
-  {% empty %}
-    <p class="text-muted">Nenhum evento finalizado hoje.</p>
-  {% endfor %}
+    </nav>
+  {% else %}
+    <p class="text-muted">Nenhum evento aberto.</p>
+  {% endif %}
 </div>
 
-<!-- Select2 + estilo -->
+<!-- ====================== Select2 + estilo ====================== -->
 <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 <style>
   .select2-container .select2-selection--single {
@@ -284,7 +295,7 @@
 
   // ---------- Inicializações
   $(function () {
-    // BEBIDAS: agora com busca por código
+    // BEBIDAS
     $('.select2').select2({
       placeholder: 'Selecione',
       allowClear: true,
@@ -293,7 +304,7 @@
       templateSelection: templateSelectionComCodigo
     });
 
-    // ALIMENTOS: mantém busca por código + unidade
+    // ALIMENTOS
     $('.select2-code').select2({
       placeholder: 'Selecione',
       allowClear: true,
@@ -302,12 +313,12 @@
       templateSelection: templateSelectionComCodigo
     });
 
-    // Dica dinâmica de unidade nos alimentos (preenche o "slot" sem quebrar o layout)
+    // Dica dinâmica de unidade nos alimentos
     $('#alimento-select').on('change', function(){
       const opt = this.options[this.selectedIndex];
       const unidade = opt ? opt.getAttribute('data-unidade') : '';
       const hint = document.getElementById('hint-unidade');
-      hint.textContent = unidade ? `Unidade: ${unidade}` : '\u00A0'; // NBSP quando vazio
+      hint.style.display = 'none';
     });
   });
 
