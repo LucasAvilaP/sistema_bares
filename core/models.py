@@ -138,7 +138,13 @@ class EstoqueBar(models.Model):
     quantidade_doses = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
-        unique_together = ('bar', 'produto')
+        # substitui unique_together
+        constraints = [
+            models.UniqueConstraint(fields=['bar', 'produto'], name='uniq_estoque_bar_produto')
+        ]
+        indexes = [
+            models.Index(fields=['bar', 'produto']),
+        ]
 
     def __str__(self):
         return f"{self.bar.nome} - {self.produto.nome}: {self.quantidade_garrafas} garrafas | {self.quantidade_doses} doses"

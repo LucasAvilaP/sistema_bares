@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from .models import (
     Restaurante, Bar, Produto, RecebimentoEstoque,
     TransferenciaBar, ContagemBar, RequisicaoProduto,
@@ -6,6 +6,7 @@ from .models import (
 )
 from django.contrib.auth.models import User
 from django.contrib.auth.admin import UserAdmin
+from django.db import transaction
 
 admin.site.register(Alimento)
 admin.site.register(EventoAlimento)
@@ -81,8 +82,24 @@ class RequisicaoProdutoAdmin(admin.ModelAdmin):
 @admin.register(EstoqueBar)
 class EstoqueBarAdmin(admin.ModelAdmin):
     list_display = ('bar', 'produto', 'quantidade_garrafas', 'quantidade_doses')
-    list_filter = ('bar', 'produto')
+    list_filter  = ('bar', 'produto')
     search_fields = ('bar__nome', 'produto__nome')
+    actions = ['criar_estoques_faltantes']
+
+    @admin.action(description="Criar estoques faltantes para todos os bares/produtos")
+    def criar_estoques_faltantes(self, request, queryset):
+        existentes = set(EstoqueBar.objects.values_list('bar_id', 'produto_id'))
+        a_criar = []
+        for b in Bar.objects.only('id'):
+            for p in Produto.objects.filter(ativo=True).only('id'):
+                if (b.id, p.id) not in existentes:
+                    a_criar.append(EstoqueBar(bar_id=b.id, produto_id=p.id))
+        if not a_criar:
+            self.message_user(request, "Nada a criar.", level=messages.INFO)
+            return
+        with transaction.atomic():
+            EstoqueBar.objects.bulk_create(a_criar, ignore_conflicts=True, batch_size=2000)
+        self.message_user(request, f"Criados {len(a_criar)} registros.", level=messages.SUCCESS)
 
 
 
