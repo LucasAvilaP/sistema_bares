@@ -46,6 +46,9 @@ class Produto(models.Model):
     doses_por_garrafa = models.PositiveIntegerField(null=True, blank=True)
     ativo = models.BooleanField(default=True)
 
+    class Meta:
+        ordering = ['nome']
+
     def __str__(self):
         return self.nome
 
@@ -145,6 +148,9 @@ class EstoqueBar(models.Model):
         indexes = [
             models.Index(fields=['bar', 'produto']),
         ]
+        ordering = ['bar__nome', 'produto__nome']
+        
+        
 
     def __str__(self):
         return f"{self.bar.nome} - {self.produto.nome}: {self.quantidade_garrafas} garrafas | {self.quantidade_doses} doses"
