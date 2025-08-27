@@ -185,23 +185,7 @@ class EstoqueBarAdmin(admin.ModelAdmin):
         ('produto', ProdutoOrdenadoListFilter),  # filtro “Por produto” A→Z
     )
     search_fields = ('bar__nome', 'produto__nome')
-    actions = ['criar_estoques_faltantes']
     autocomplete_fields = ('bar', 'produto')  # formulário com busca
-
-    @admin.action(description="Criar estoques faltantes para todos os bares/produtos")
-    def criar_estoques_faltantes(self, request, queryset):
-        existentes = set(EstoqueBar.objects.values_list('bar_id', 'produto_id'))
-        a_criar = []
-        for b in Bar.objects.only('id'):
-            for p in Produto.objects.filter(ativo=True).only('id'):
-                if (b.id, p.id) not in existentes:
-                    a_criar.append(EstoqueBar(bar_id=b.id, produto_id=p.id))
-        if not a_criar:
-            messages.info(request, "Nada a criar.")
-            return
-        with transaction.atomic():
-            EstoqueBar.objects.bulk_create(a_criar, ignore_conflicts=True, batch_size=2000)
-        messages.success(request, f"Criados {len(a_criar)} registros.")
 
 # -------------------------------------------------------------------
 # Eventos

@@ -8,10 +8,6 @@ from django.db import transaction
 
 
 
-
-
-
-
 class Restaurante(models.Model):
     nome = models.CharField(max_length=100)
 
