@@ -286,6 +286,7 @@ class PermissaoPagina(models.Model):
         ('historico_transf', 'Historico_transf'),
         ('relatorios', 'Relatórios'),
         ('entrada_mercadoria', 'Entrada_mercadoria'),
+        ('importacao', 'Importacao'),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)

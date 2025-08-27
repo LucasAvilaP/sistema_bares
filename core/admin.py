@@ -1,7 +1,11 @@
-from django.contrib.admin.helpers import ActionForm
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.helpers import ActionForm
+from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import User
 from django.db import transaction
+from django.urls import reverse
+from django.http import HttpResponseRedirect
 
 from .models import (
     Restaurante, Bar, Produto, RecebimentoEstoque,
@@ -9,9 +13,6 @@ from .models import (
     EstoqueBar, AcessoUsuarioBar, Evento, EventoProduto,
     PermissaoPagina, Alimento, EventoAlimento, PerdaProduto
 )
-from django.contrib.auth.models import User
-from django.contrib.auth.admin import UserAdmin
-
 
 # -------------------------------------------------------------------
 # Registros simples
@@ -19,9 +20,8 @@ from django.contrib.auth.admin import UserAdmin
 admin.site.register(Alimento)
 admin.site.register(EventoAlimento)
 
-
 # -------------------------------------------------------------------
-# Inline: vínculo de usuário com restaurantes/bares
+# Inlines (mover para cima para serem visíveis no CustomUserAdmin)
 # -------------------------------------------------------------------
 class AcessoUsuarioBarInline(admin.StackedInline):
     model = AcessoUsuarioBar
@@ -30,6 +30,9 @@ class AcessoUsuarioBarInline(admin.StackedInline):
     verbose_name_plural = "Acessos a Restaurantes e Bares"
     filter_horizontal = ('bares',)
 
+class PermissaoPaginaInline(admin.TabularInline):
+    model = PermissaoPagina
+    extra = 1
 
 # -------------------------------------------------------------------
 # Admins básicos
@@ -38,16 +41,14 @@ class AcessoUsuarioBarInline(admin.StackedInline):
 class RestauranteAdmin(admin.ModelAdmin):
     list_display = ('nome',)
 
-
 @admin.register(Bar)
 class BarAdmin(admin.ModelAdmin):
-    list_display = ('nome', 'restaurante', 'is_estoque_central')
-    list_filter = ('restaurante', 'is_estoque_central')
-    search_fields = ('nome', 'restaurante__nome')
-
+    list_display  = ('nome', 'restaurante', 'is_estoque_central')
+    list_filter   = ('restaurante', 'is_estoque_central')
+    search_fields = ('nome', 'restaurante__nome')  # necessário p/ autocomplete em EstoqueBar
 
 # -------------------------------------------------------------------
-# Action form para adicionar vários produtos a vários bares
+# Action form (precisa herdar de ActionForm)
 # -------------------------------------------------------------------
 class AddProdutosToBarsActionForm(ActionForm):
     bares = forms.ModelMultipleChoiceField(
@@ -61,7 +62,6 @@ class AddProdutosToBarsActionForm(ActionForm):
     quantidade_doses = forms.DecimalField(
         max_digits=10, decimal_places=2, required=False, initial=0, label='Qtd. doses (opcional)'
     )
-
 
 # -------------------------------------------------------------------
 # ProdutoAdmin: inclui action para criar EstoqueBar em massa
@@ -84,10 +84,8 @@ class ProdutoAdmin(admin.ModelAdmin):
             return
 
         try:
-            q_g = request.POST.get('quantidade_garrafas') or 0
-            q_d = request.POST.get('quantidade_doses') or 0
-            q_g = float(q_g)
-            q_d = float(q_d)
+            q_g = float(request.POST.get('quantidade_garrafas') or 0)
+            q_d = float(request.POST.get('quantidade_doses') or 0)
         except ValueError:
             messages.error(request, "Quantidades inválidas.")
             return
@@ -95,7 +93,6 @@ class ProdutoAdmin(admin.ModelAdmin):
         bares = Bar.objects.filter(pk__in=bar_ids)
         produtos = list(queryset)
 
-        # evita duplicados já existentes
         existentes = set(
             EstoqueBar.objects
             .filter(bar__in=bares, produto__in=produtos)
@@ -105,8 +102,7 @@ class ProdutoAdmin(admin.ModelAdmin):
         criar = []
         for b in bares:
             for p in produtos:
-                key = (b.id, p.id)
-                if key not in existentes:
+                if (b.id, p.id) not in existentes:
                     criar.append(EstoqueBar(
                         bar=b, produto=p,
                         quantidade_garrafas=q_g or 0,
@@ -122,7 +118,6 @@ class ProdutoAdmin(admin.ModelAdmin):
             f"Criados {len(criar)} estoques (Produtos: {len(produtos)} | Bares: {bares.count()})."
         )
 
-
 # -------------------------------------------------------------------
 # Recebimento de estoque
 # -------------------------------------------------------------------
@@ -132,7 +127,6 @@ class RecebimentoEstoqueAdmin(admin.ModelAdmin):
     list_filter = ('restaurante', 'bar', 'produto')
     search_fields = ('produto__nome', 'bar__nome', 'restaurante__nome')
 
-
 # -------------------------------------------------------------------
 # Transferência entre bares
 # -------------------------------------------------------------------
@@ -141,7 +135,6 @@ class TransferenciaBarAdmin(admin.ModelAdmin):
     list_display = ('produto', 'quantidade', 'origem', 'destino', 'restaurante', 'usuario', 'data_transferencia')
     list_filter = ('restaurante', 'produto', 'origem', 'destino', 'usuario')
     search_fields = ('produto__nome', 'origem__nome', 'destino__nome', 'usuario__username')
-
 
 # -------------------------------------------------------------------
 # Contagem de bar
@@ -155,14 +148,13 @@ class ContagemBarAdmin(admin.ModelAdmin):
     list_filter = ('bar', 'produto', 'usuario')
     search_fields = ('bar__nome', 'produto__nome', 'usuario__username')
 
-
 # -------------------------------------------------------------------
 # Requisição de produto
 # -------------------------------------------------------------------
 @admin.register(RequisicaoProduto)
 class RequisicaoProdutoAdmin(admin.ModelAdmin):
     list_display = ('produto', 'quantidade_solicitada', 'bar', 'restaurante', 'usuario', 'status', 'data_solicitacao')
-    list_filter = ('restaurante', 'bar', 'status')
+    list_filter  = ('restaurante', 'bar', 'status')
     search_fields = ('produto__nome', 'bar__nome', 'usuario__username')
     actions = ['aprovar_requisicao', 'negar_requisicao']
 
@@ -174,18 +166,13 @@ class RequisicaoProdutoAdmin(admin.ModelAdmin):
     def negar_requisicao(self, request, queryset):
         queryset.update(status='NEGADA')
 
-
 # -------------------------------------------------------------------
 # Filtro lateral "Por produto" em ordem alfabética garantida
 # -------------------------------------------------------------------
 class ProdutoOrdenadoListFilter(admin.RelatedFieldListFilter):
-    """
-    Força o filtro 'produto' a listar as opções em ordem alfabética por Produto.nome.
-    """
     def field_choices(self, field, request, model_admin):
         qs = Produto.objects.order_by('nome').only('id', 'nome')
         return [(obj.pk, str(obj)) for obj in qs]
-
 
 # -------------------------------------------------------------------
 # Estoque de bar
@@ -195,11 +182,11 @@ class EstoqueBarAdmin(admin.ModelAdmin):
     list_display = ('bar', 'produto', 'quantidade_garrafas', 'quantidade_doses')
     list_filter  = (
         'bar',
-        ('produto', ProdutoOrdenadoListFilter),   # filtro “Por produto” A→Z
+        ('produto', ProdutoOrdenadoListFilter),  # filtro “Por produto” A→Z
     )
     search_fields = ('bar__nome', 'produto__nome')
     actions = ['criar_estoques_faltantes']
-    autocomplete_fields = ('bar', 'produto')      # ajuda no formulário de criação/edição
+    autocomplete_fields = ('bar', 'produto')  # formulário com busca
 
     @admin.action(description="Criar estoques faltantes para todos os bares/produtos")
     def criar_estoques_faltantes(self, request, queryset):
@@ -216,7 +203,6 @@ class EstoqueBarAdmin(admin.ModelAdmin):
             EstoqueBar.objects.bulk_create(a_criar, ignore_conflicts=True, batch_size=2000)
         messages.success(request, f"Criados {len(a_criar)} registros.")
 
-
 # -------------------------------------------------------------------
 # Eventos
 # -------------------------------------------------------------------
@@ -229,27 +215,26 @@ class EventoAdmin(admin.ModelAdmin):
     list_display = ['nome', 'data_criacao', 'responsavel']
     inlines = [EventoProdutoInline]
 
-
 # -------------------------------------------------------------------
 # User com inlines de acesso e permissões
+#   - Inlines aparecem somente no change_view por padrão
+#   - response_add redireciona para change_view assim que o usuário é criado
 # -------------------------------------------------------------------
 admin.site.unregister(User)
 
 class CustomUserAdmin(UserAdmin):
-    inlines = [AcessoUsuarioBarInline,]
-    # Se quiser puxar PermissaoPagina como inline em User, basta incluir:
-    # inlines = [AcessoUsuarioBarInline, PermissaoPaginaInline]
+    inlines = [AcessoUsuarioBarInline, PermissaoPaginaInline]
+
+    def response_add(self, request, obj, post_url_continue=None):
+        """
+        Após criar o usuário, redireciona para a tela de edição (change_view)
+        para já exibir os inlines de Acesso e Permissão de Páginas.
+        """
+        change_url = reverse('admin:auth_user_change', args=[obj.pk])
+        messages.info(request, "Usuário criado. Agora você pode definir acessos e permissões.")
+        return HttpResponseRedirect(change_url)
 
 admin.site.register(User, CustomUserAdmin)
-
-
-# -------------------------------------------------------------------
-# Permissão de página (admin simples)
-# -------------------------------------------------------------------
-class PermissaoPaginaInline(admin.TabularInline):
-    model = PermissaoPagina
-    extra = 1
-
 
 # -------------------------------------------------------------------
 # Perdas de produto

@@ -1292,7 +1292,7 @@ def assistente_importacao(request):
     # if not request.user.is_superuser:
     #     messages.error(request, "Acesso restrito.")
     #     return redirect("dashboard")
-    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='entrada_mercadoria').exists():
+    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='importacao').exists():
         messages.error(request, "Você não tem permissão para acessar a importação.")
         return redirect("dashboard")
 
