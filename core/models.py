@@ -52,10 +52,20 @@ class Produto(models.Model):
 
 class RecebimentoEstoque(models.Model):
     restaurante = models.ForeignKey(Restaurante, on_delete=models.CASCADE, related_name='recebimentos')
+    usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     bar = models.ForeignKey(Bar, on_delete=models.CASCADE, related_name='recebimentos')
     produto = models.ForeignKey(Produto, on_delete=models.CASCADE)
     quantidade = models.DecimalField(max_digits=10, decimal_places=2)
     data_recebimento = models.DateTimeField(default=timezone.now)
+
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['restaurante', 'data_recebimento'], name='ix_receb_rest_data'),
+            # se preferir created_at:
+            # models.Index(fields=['restaurante', 'created_at'], name='ix_receb_rest_created')
+        ]
+
 
     def __str__(self):
         return f"{self.produto.nome} - {self.quantidade} un - {self.bar.nome}"
@@ -197,7 +207,13 @@ class Evento(models.Model):
         ('ABERTO', 'Aberto'),
         ('FINALIZADO', 'Finalizado'),
     )
-
+    restaurante = models.ForeignKey(
+        Restaurante,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='eventos'
+    )
     nome = models.CharField(max_length=100)
     data_criacao = models.DateTimeField(auto_now_add=True)
     responsavel = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -280,6 +296,7 @@ class PermissaoPagina(models.Model):
         ('historico_cont', 'Histórico_cont'),
         ('historico_requi', 'Historico_requi'),
         ('historico_transf', 'Historico_transf'),
+        ('historico_entrada', 'Historico_entrada'),
         ('relatorios', 'Relatórios'),
         ('entrada_mercadoria', 'Entrada_mercadoria'),
         ('importacao', 'Importacao'),

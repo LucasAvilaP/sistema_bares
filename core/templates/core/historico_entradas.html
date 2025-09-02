@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container mt-4">
+  <h2 class="mb-4">📦 Histórico de Entradas de Mercadorias</h2>
+
+  <form method="GET" class="row g-3 align-items-end mb-4">
+    <div class="col-auto">
+      <label for="mes" class="form-label">Mês:</label>
+      <select id="mes" name="mes" class="form-select">
+        {% for m in meses %}
+          <option value="{{ m }}" {% if request.GET.mes == m|stringformat:"s" %}selected{% endif %}>
+            {{ m|stringformat:"02d" }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-auto">
+      <label for="ano" class="form-label">Ano:</label>
+      <input type="number" id="ano" name="ano"
+             value="{{ request.GET.ano|default:now.year }}"
+             min="2020" max="{{ now.year }}" class="form-control">
+    </div>
+
+    <div class="col-auto">
+      <button type="submit" class="btn btn-primary">🔎 Filtrar</button>
+    </div>
+  </form>
+
+  {% if not agrupado %}
+    <div class="alert alert-info">Nenhuma entrada registrada.</div>
+  {% endif %}
+
+  <!-- ACCORDION -->
+  <div class="accordion" id="accordionEntradas">
+    {% for data, itens in agrupado.items %}
+      {% with idx=forloop.counter %}
+      <div class="accordion-item">
+        <h2 class="accordion-header" id="heading{{ idx }}">
+          <button class="accordion-button collapsed" type="button"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#collapse{{ idx }}"
+                  aria-expanded="false" aria-controls="collapse{{ idx }}">
+            {% if data_field %}{{ data|date:"d/m/Y" }}{% else %}Entradas{% endif %}
+            &nbsp;—&nbsp;{{ itens|length }} itens
+          </button>
+        </h2>
+        <div id="collapse{{ idx }}" class="accordion-collapse collapse"
+             aria-labelledby="heading{{ idx }}" data-bs-parent="#accordionEntradas">
+          <div class="accordion-body">
+            {% for item in itens %}
+              <div class="mb-3 p-3 border rounded bg-light">
+                <h5 class="mb-2"><strong>{{ item.produto.nome }}</strong></h5>
+                <p class="mb-1">➕ Quantidade: <strong>{{ item.quantidade }}</strong></p>
+                {% if item.bar %}<p class="mb-1">🏷️ Bar: {{ item.bar.nome }}</p>{% endif %}
+                {% if item.usuario %}<p class="mb-1">👤 Usuário: {{ item.usuario.username }}</p>{% endif %}
+                {% if item.observacao %}<p class="mb-1">📝 Observação: {{ item.observacao }}</p>{% endif %}
+
+                {% if item.data_recebimento %}
+                  <small class="text-muted">⏱️ {{ item.data_recebimento|date:"d/m/Y H:i" }}</small>
+                {% elif item.created_at %}
+                  <small class="text-muted">⏱️ {{ item.created_at|date:"d/m/Y H:i" }}</small>
+                {% else %}
+                  <small class="text-muted">⏱️ Registro nº {{ item.id }}</small>
+                {% endif %}
+              </div>
+            {% empty %}
+              <em class="text-muted">Sem itens neste dia.</em>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endwith %}
+    {% endfor %}
+  </div>
+
+  <!-- BOTÃO DE PAGINAÇÃO POR CURSOR: FORA DO LOOP -->
+  {% if next_before %}
+    <div class="d-grid mt-3">
+      <a class="btn btn-outline-secondary"
+         href="?before={{ next_before }}{% if request.GET.mes %}&mes={{ request.GET.mes }}{% endif %}{% if request.GET.ano %}&ano={{ request.GET.ano }}{% endif %}">
+        ⬅️ Ver dias anteriores
+      </a>
+    </div>
+  {% endif %}
+</div>
+
+<!-- opcional: pequenos ajustes de espaçamento -->
+<style>
+  .accordion-button { padding-top: .6rem; padding-bottom: .6rem; }
+  .accordion-body   { padding-top: .75rem; padding-bottom: .75rem; }
+</style>
+{% endblock %}

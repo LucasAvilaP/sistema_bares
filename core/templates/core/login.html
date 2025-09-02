@@ -1,39 +1,64 @@
 {% extends 'base_login.html' %}
 {% block content %}
 <div class="container d-flex justify-content-center align-items-center" style="min-height: 80vh;">
-    <div class="card shadow p-4" style="width: 100%; max-width: 400px;">
-        <h3 class="text-center mb-4">Login 🔐</h3>
+  <div class="card shadow p-4" style="width: 100%; max-width: 400px;">
+    <h3 class="text-center mb-4">Login 🔐</h3>
 
-        {% if erro %}
-            <div class="alert alert-danger" role="alert">
-                {{ erro }}
-            </div>
-        {% endif %}
+    {% if erro %}
+      <div class="alert alert-danger" role="alert">
+        {{ erro }}
+      </div>
+    {% endif %}
 
-        <form method="post">
-            {% csrf_token %}
-            
-            <div class="mb-3">
-                <label for="username" class="form-label">Usuário:</label>
-                <input type="text" name="username" id="username" class="form-control" required>
-            </div>
+    <form method="post" id="login-form">
+      {% csrf_token %}
 
-            <div class="mb-3">
-                <label for="password" class="form-label">Senha:</label>
-                <input type="password" name="password" id="password" class="form-control" required>
-            </div>
+      <!-- Campo NEXT (opcional; preenchido pelo botão "Ir para Eventos") -->
+      <input type="hidden" name="next" id="next">
 
-            <div class="mb-3">
-                <label for="restaurante" class="form-label">Restaurante:</label>
-                <select name="restaurante" id="restaurante" class="form-select" required>
-                    {% for restaurante in restaurantes %}
-                        <option value="{{ restaurante.id }}">{{ restaurante.nome }}</option>
-                    {% endfor %}
-                </select>
-            </div>
+      <div class="mb-3">
+        <label for="username" class="form-label">Usuário:</label>
+        <input type="text" name="username" id="username" class="form-control" required>
+      </div>
 
-            <button type="submit" class="btn btn-primary w-100">Entrar</button>
-        </form>
-    </div>
+      <div class="mb-3">
+        <label for="password" class="form-label">Senha:</label>
+        <input type="password" name="password" id="password" class="form-control" required>
+      </div>
+
+      <div class="mb-3">
+        <label for="restaurante" class="form-label">Restaurante:</label>
+        <select name="restaurante" id="restaurante" class="form-select" required>
+          {% for restaurante in restaurantes %}
+            <option value="{{ restaurante.id }}">{{ restaurante.nome }}</option>
+          {% endfor %}
+        </select>
+        <hr>
+
+      <!-- Botão padrão: segue fluxo atual (valida restaurante e vai para selecionar-bar) -->
+      <button type="submit" class="btn btn-primary w-100 mb-2">Entrar</button>
+
+      <!-- Botão alternativo: define next para /eventos/ e envia o form -->
+      <button type="button" class="btn btn-outline-primary w-100"
+          data-url="{% url 'pagina_eventos' %}"
+          id="btn-eventos">
+          Entrar e ir para Eventos
+      </button>
+    </form>
+  </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const btnEventos = document.getElementById('btn-eventos');
+  
+  if (btnEventos) {
+    btnEventos.addEventListener('click', function() {
+      const url = this.getAttribute('data-url');
+      document.getElementById('next').value = url;
+      document.getElementById('login-form').submit();
+    });
+  }
+});
+</script>
+
 {% endblock %}

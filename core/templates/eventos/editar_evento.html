@@ -19,10 +19,9 @@
   </div>
 
   <form method="post">
-    {% csrf_token %}
+  {% csrf_token %}
 
-
-  <!-- ✅ EDITAR HORAS DO EVENTO -->
+  <!-- ✅ EDITAR DADOS GERAIS -->
   <div class="row g-3 mb-4">
     <div class="col-md-4">
       <label class="form-label">Horas do evento</label>
@@ -36,33 +35,56 @@
         placeholder="ex.: 4 ou 3,5">
       <div class="form-text">Aceita frações (ex.: 3,5h). Use vírgula ou ponto.</div>
     </div>
+
+    <!-- ✅ NOVO: EDITAR Nº DE PESSOAS -->
+    <div class="col-md-4">
+      <label class="form-label">Número de pessoas</label>
+      <input
+        name="numero_pessoas_evento"
+        type="number"
+        min="0"
+        step="1"
+        class="form-control"
+        value="{% if evento.numero_pessoas %}{{ evento.numero_pessoas }}{% endif %}"
+        placeholder="ex.: 80">
+      <div class="form-text">Deixe em branco para não alterar.</div>
+    </div>
   </div>
 
     <!-- BEBIDAS EXISTENTES -->
     <h5 class="mt-4">🍾 Bebidas</h5>
     <div class="table-responsive">
-      <table class="table table-bordered bg-white">
+      <table class="table table-bordered bg-white align-middle">
         <thead class="table-light">
-          <tr><th>Produto</th><th style="width:160px;">Garrafas</th><th style="width:160px;">Doses</th></tr>
+          <tr>
+            <th style="width:36px;" class="text-center" title="Remover item">🗑️</th>
+            <th>Produto</th>
+            <th style="width:160px;">Garrafas</th>
+            <th style="width:160px;">Doses</th>
+          </tr>
         </thead>
         <tbody>
           {% for ep in evento.produtos.all %}
-          <tr>
+          <tr data-row-type="bebida">
+            <td class="text-center">
+              <input type="checkbox" name="del_prod[]" value="{{ ep.id }}" class="form-check-input del-toggle" aria-label="Remover bebida">
+            </td>
             <td>{{ ep.produto.nome }}</td>
             <td>
-              <input name="prod_g_{{ ep.id }}" type="number" min="0" step="1" class="form-control"
+              <input name="prod_g_{{ ep.id }}" type="number" min="0" step="1" class="form-control item-input"
                      value="{% localize off %}{{ ep.garrafas }}{% endlocalize %}">
             </td>
             <td>
-              <input name="prod_d_{{ ep.id }}" type="number" min="0" step="1" class="form-control"
+              <input name="prod_d_{{ ep.id }}" type="number" min="0" step="1" class="form-control item-input"
                      value="{% localize off %}{{ ep.doses }}{% endlocalize %}">
             </td>
           </tr>
           {% empty %}
-          <tr><td colspan="3" class="text-muted">Sem bebidas neste evento.</td></tr>
+          <tr><td colspan="4" class="text-muted">Sem bebidas neste evento.</td></tr>
           {% endfor %}
         </tbody>
       </table>
+      <div class="form-text">Marque a caixa para remover a bebida ao salvar.</div>
     </div>
 
     <!-- ADICIONAR NOVA BEBIDA -->
@@ -89,25 +111,34 @@
     <!-- ALIMENTOS EXISTENTES -->
     <h5 class="mt-3">🍽️ Alimentos</h5>
     <div class="table-responsive">
-      <table class="table table-bordered bg-white">
+      <table class="table table-bordered bg-white align-middle">
         <thead class="table-light">
-          <tr><th>Alimento</th><th style="width:220px;">Quantidade</th><th>Unidade</th></tr>
+          <tr>
+            <th style="width:36px;" class="text-center" title="Remover item">🗑️</th>
+            <th>Alimento</th>
+            <th style="width:220px;">Quantidade</th>
+            <th>Unidade</th>
+          </tr>
         </thead>
         <tbody>
           {% for ea in evento.alimentos.all %}
-          <tr>
+          <tr data-row-type="alimento">
+            <td class="text-center">
+              <input type="checkbox" name="del_ali[]" value="{{ ea.id }}" class="form-check-input del-toggle" aria-label="Remover alimento">
+            </td>
             <td>{{ ea.alimento.nome }}</td>
             <td>
-              <input name="ali_q_{{ ea.id }}" type="number" min="0" step="0.01" class="form-control"
+              <input name="ali_q_{{ ea.id }}" type="number" min="0" step="0.01" class="form-control item-input"
                      value="{{ ea.quantidade|as_dot:2 }}">
             </td>
             <td>{{ ea.alimento.get_unidade_display }}</td>
           </tr>
           {% empty %}
-          <tr><td colspan="3" class="text-muted">Sem alimentos neste evento.</td></tr>
+          <tr><td colspan="4" class="text-muted">Sem alimentos neste evento.</td></tr>
           {% endfor %}
         </tbody>
       </table>
+      <div class="form-text">Marque a caixa para remover o alimento ao salvar.</div>
     </div>
 
     <!-- ADICIONAR NOVO ALIMENTO -->
@@ -133,4 +164,29 @@
     </div>
   </form>
 </div>
+
+<!-- UX opcional: esmaece e desabilita inputs quando marcar "remover" -->
+<script>
+  (function () {
+    const toggles = document.querySelectorAll('.del-toggle');
+    toggles.forEach(function (chk) {
+      const tr = chk.closest('tr');
+      const inputs = tr ? tr.querySelectorAll('.item-input') : [];
+
+      function applyState() {
+        const remove = chk.checked;
+        inputs.forEach(inp => inp.disabled = remove);
+        if (remove) {
+          tr.classList.add('table-danger', 'opacity-75');
+        } else {
+          tr.classList.remove('table-danger', 'opacity-75');
+        }
+      }
+
+      chk.addEventListener('change', applyState);
+      // estado inicial (caso browser recupere estado do form)
+      applyState();
+    });
+  })();
+</script>
 {% endblock %}

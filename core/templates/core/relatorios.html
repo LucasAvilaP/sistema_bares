@@ -10,8 +10,8 @@
                 <div class="card-body">
                     <h5 class="card-title">📦 Saídas de Estoque para os Bares</h5>
                     <p class="card-text">Visualize tudo que saiu do estoque central para os bares, incluindo pedidos aprovados e rejeitados.</p>
-                    <a href="{% url 'relatorio_saida_estoque' %}" class="btn btn-primary">Acessar Relatório</a>
-                    <a href="{% url 'exportar_saida_estoque_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                    <a href="{% url 'relatorio_saida_estoque' %}" class="btn btn-primary" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'exportar_saida_estoque_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -21,8 +21,8 @@
                 <div class="card-body">
                     <h5 class="card-title">📊 Contagem Final x Saída x Diferença</h5>
                     <p class="card-text">Compare o que foi solicitado, o que foi contado no final do dia e veja discrepâncias.</p>
-                    <a href="{% url 'relatorio-consolidado' %}" class="btn btn-success">Acessar Relatório</a>
-                    <a href="{% url 'relatorio_consolidado_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                    <a href="{% url 'relatorio-consolidado' %}" class="btn btn-success" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'relatorio_consolidado_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -32,8 +32,8 @@
                 <div class="card-body">
                     <h5 class="card-title">🔁 Contagem Atual</h5>
                     <p class="card-text">Veja a contagem mais recente de cada produto em todos os bares.</p>
-                    <a href="{% url 'relatorio_contagem_atual' %}" class="btn btn-info text-white">Acessar Relatório</a>
-                    <a href="{% url 'exportar_contagem_atual_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                    <a href="{% url 'relatorio_contagem_atual' %}" class="btn btn-info text-white" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'exportar_contagem_atual_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -57,8 +57,8 @@
                     <p class="card-text">
                         Compare as duas últimas contagens de cada produto e identifique aumentos ou reduções.
                     </p>
-                    <a href="{% url 'relatorio_diferenca_contagens' %}" class="btn btn-danger">Acessar Relatório</a>
-                    <a href="{% url 'exportar_diferenca_contagens_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                    <a href="{% url 'relatorio_diferenca_contagens' %}" class="btn btn-danger" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'exportar_diferenca_contagens_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
                 </div>
             </div>
         </div>
@@ -69,8 +69,8 @@
                 <div class="card-body">
                     <h5 class="card-title">📉 Relatório de Perdas</h5>
                     <p class="card-text">Analise perdas por bar, período, produto (nome/código) e motivo. Inclui consolidados e detalhamento.</p>
-                    <a href="{% url 'relatorio_perdas' %}" class="btn btn-dark">Acessar Relatório</a>
-                    <a href="{% url 'exportar_relatorio_perdas_excel' %}" class="btn btn-outline-danger ms-2">⬇️ Exportar Excel</a>
+                    <a href="{% url 'relatorio_perdas' %}" class="btn btn-dark" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'exportar_relatorio_perdas_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
                     
                 </div>
             </div>

@@ -10,6 +10,7 @@ from itertools import zip_longest
 from datetime import time
 from django.core.paginator import Paginator
 from django.db import transaction
+from django.core.exceptions import FieldError
 import uuid
 import pandas as pd
 import openpyxl
@@ -37,17 +38,29 @@ from django.utils.text import slugify
 
 def login_view(request):
     context = {}
+    # suporta ?next=/alguma-rota/
+    next_url = request.GET.get('next') or request.POST.get('next')
 
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
-        restaurante_id = request.POST.get('restaurante')
+
+        # Só exigiremos restaurante se NÃO houver next (ou seja, fluxo padrão)
+        restaurante_id = (request.POST.get('restaurante') or '').strip()
 
         user = authenticate(request, username=username, password=password)
         if user is not None:
             login(request, user)
 
-            # Verifica se esse restaurante é permitido para esse usuário
+            # Se veio next, honramos e vamos direto (ex.: página de eventos)
+            if next_url:
+                return redirect(next_url)
+
+            # Fluxo antigo: exige restaurante válido e acesso, seta na sessão e vai para selecionar-bar
+            if not restaurante_id:
+                messages.error(request, 'Selecione um restaurante.')
+                return redirect('login')
+
             acesso_valido = AcessoUsuarioBar.objects.filter(user=user, restaurante_id=restaurante_id).exists()
             if not acesso_valido:
                 messages.error(request, 'Você não tem acesso a este restaurante.')
@@ -59,7 +72,10 @@ def login_view(request):
         else:
             context['erro'] = 'Usuário ou senha inválidos'
 
-    context['restaurantes'] = Restaurante.objects.all()  # Mostrar todos os restaurantes para dropdown
+    context['restaurantes'] = Restaurante.objects.all()  # dropdown
+    # mantém o next na página (para o botão direto)
+    if next_url:
+        context['next'] = next_url
     return render(request, 'core/login.html', context)
 
 
@@ -74,34 +90,63 @@ def logout_view(request):
 
 @login_required
 def selecionar_bar_view(request):
+    # Restaurantes em que o usuário possui acesso
+    acessos_user = (AcessoUsuarioBar.objects
+                    .filter(user=request.user)
+                    .select_related('restaurante'))
+
+    restaurantes_permitidos = (Restaurante.objects
+                               .filter(id__in=acessos_user.values_list('restaurante_id', flat=True).distinct())
+                               .order_by('nome'))
+
+    # Trocar restaurante explicitamente
+    if request.method == 'POST' and request.POST.get('acao') == 'trocar_restaurante':
+        request.session.pop('restaurante_id', None)
+        request.session.pop('bar_id', None)
+        request.session.pop('bar_nome', None)
+        return redirect('selecionar-bar')
+
     restaurante_id = request.session.get('restaurante_id')
 
+    # --------- ETAPA 1: selecionar restaurante ----------
     if not restaurante_id:
-        messages.error(request, "Restaurante não selecionado.")
-        return redirect('login')
+        if request.method == 'POST':
+            rid = (request.POST.get('restaurante') or '').strip()
+            if rid and restaurantes_permitidos.filter(id=rid).exists():
+                request.session['restaurante_id'] = int(rid)
+                request.session.pop('bar_id', None)
+                request.session.pop('bar_nome', None)
+                return redirect('selecionar-bar')
+            messages.error(request, "Selecione um restaurante válido.")
 
+        return render(request, 'core/selecionar_bar.html', {
+            'etapa': 'restaurante',
+            'restaurantes': restaurantes_permitidos,
+        })
+
+    # --------- ETAPA 2: selecionar bar ----------
     restaurante = get_object_or_404(Restaurante, id=restaurante_id)
 
-    acessos = AcessoUsuarioBar.objects.filter(user=request.user, restaurante_id=restaurante_id)
-
-    # Correção aqui: ManyToMany → bares__id
-    bares_ids = acessos.values_list('bares__id', flat=True)
-    bares = Bar.objects.filter(id__in=bares_ids)
+    bares_ids = (acessos_user
+                 .filter(restaurante_id=restaurante_id)
+                 .values_list('bares__id', flat=True))
+    bares = Bar.objects.filter(id__in=bares_ids).order_by('nome')
 
     if request.method == 'POST':
-        bar_id = request.POST.get('bar')
+        bar_id = (request.POST.get('bar') or '').strip()
         if bar_id and bares.filter(id=bar_id).exists():
             bar = Bar.objects.get(id=bar_id)
             request.session['bar_id'] = bar.id
             request.session['bar_nome'] = bar.nome
-            return redirect('dashboard')
-
-        else:
-            messages.error(request, "Bar inválido ou sem permissão.")
+            next_url = request.GET.get('next')
+            return redirect(next_url or 'dashboard')
+        messages.error(request, "Bar inválido ou sem permissão.")
 
     return render(request, 'core/selecionar_bar.html', {
+        'etapa': 'bar',
+        'restaurante': restaurante,
         'bares': bares,
-        'restaurante': restaurante
+        'restaurantes': restaurantes_permitidos,  # opcional: para combo de troca rápida
     })
 
 
@@ -177,6 +222,7 @@ def entrada_mercadorias_view(request):
     if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='entrada_mercadoria').exists():
         messages.error(request, 'Você não tem permissão para acessar essa página.')
         return redirect('dashboard')
+
     restaurante_id = request.session.get('restaurante_id')
     restaurante = Restaurante.objects.get(id=restaurante_id)
 
@@ -184,7 +230,7 @@ def entrada_mercadorias_view(request):
         estoque_central = Bar.objects.get(restaurante=restaurante, is_estoque_central=True)
     except Bar.DoesNotExist:
         messages.error(request, "Estoque central não definido para este restaurante.")
-        return redirect('/dashboard/')
+        return redirect('dashboard')
 
     if request.method == 'POST':
         produtos = request.POST.getlist('produto[]')
@@ -192,17 +238,29 @@ def entrada_mercadorias_view(request):
 
         for prod_id, qtd in zip(produtos, quantidades):
             produto = Produto.objects.get(id=prod_id)
-            quantidade = Decimal(qtd.replace(',', '.')) if qtd else Decimal(0)
+            quantidade = Decimal((qtd or '').replace(',', '.')) if qtd else Decimal(0)
 
-            # Salva o registro da entrada
-            RecebimentoEstoque.objects.create(
+            # Monta kwargs para não quebrar caso o modelo ainda não tenha esses campos
+            kwargs = dict(
                 restaurante=restaurante,
                 bar=estoque_central,
                 produto=produto,
                 quantidade=quantidade
             )
+            # Se o modelo tiver usuario/data_recebimento/observacao, preenche
+            if hasattr(RecebimentoEstoque, 'usuario'):
+                kwargs['usuario'] = request.user
+            if hasattr(RecebimentoEstoque, 'data_recebimento'):
+                kwargs['data_recebimento'] = timezone.now()
+            # Observação opcional vinda do form (ex.: um <input name="observacao"> geral ou por linha)
+            obs = (request.POST.get('observacao') or '').strip()
+            if obs and hasattr(RecebimentoEstoque, 'observacao'):
+                kwargs['observacao'] = obs
 
-            # Atualiza o estoque
+            # 1) Registra a entrada
+            RecebimentoEstoque.objects.create(**kwargs)
+
+            # 2) Atualiza estoque do bar central
             EstoqueBar.adicionar(estoque_central, produto, quantidade)
 
         messages.success(request, "Entrada de mercadorias realizada com sucesso!")
@@ -210,6 +268,112 @@ def entrada_mercadorias_view(request):
 
     produtos = Produto.objects.filter(ativo=True).order_by('nome')
     return render(request, 'core/entrada_mercadorias.html', {'produtos': produtos})
+
+
+
+@login_required
+def historico_entradas_view(request):
+    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='historico_entrada').exists():
+        messages.error(request, "Você não tem permissão para acessar o Histórico de Entradas.")
+        return redirect('dashboard')
+
+    restaurante_id = request.session.get('restaurante_id')
+    if not restaurante_id:
+        messages.error(request, "Restaurante não selecionado.")
+        return redirect('dashboard')
+
+    # Base
+    entradas = RecebimentoEstoque.objects.filter(restaurante_id=restaurante_id).select_related(
+        'produto', 'bar', 'usuario'
+    )
+
+    # Campo de data preferencial
+    data_field = 'data_recebimento' if hasattr(RecebimentoEstoque, 'data_recebimento') else (
+                 'created_at' if hasattr(RecebimentoEstoque, 'created_at') else None)
+
+    # Ordenação alinhada ao índice
+    if data_field:
+        entradas = entradas.order_by(f'-{data_field}', '-id')
+    else:
+        entradas = entradas.order_by('-id')  # fallback
+
+    # Filtros
+    mes = request.GET.get('mes')
+    ano = request.GET.get('ano')
+    before = request.GET.get('before')  # cursor para datas anteriores (YYYY-MM-DD)
+
+    # Filtro Mês/Ano: preferir range (aproveita índice)
+    if mes and ano and data_field:
+        ano = int(ano); mes = int(mes)
+        inicio = date(ano, mes, 1)
+        if mes == 12:
+            fim = date(ano + 1, 1, 1)
+        else:
+            fim = date(ano, mes + 1, 1)
+        entradas = entradas.filter(**{f'{data_field}__gte': inicio, f'{data_field}__lt': fim})
+
+    agrupado = {}
+    next_before = None
+
+    # Quando NÃO está filtrando por mês/ano, aplicamos o modelo "10 dias + cursor"
+    if not (mes and ano):
+        if before and data_field:
+            # pega blocos de 10 dias anteriores ao dia passado
+            entradas = entradas.filter(**{f'{data_field}__date__lt': before})
+
+        # subquery leve só com as 10 últimas datas distintas
+        if data_field:
+            ultimos_dias = (entradas
+                            .annotate(d=TruncDate(data_field))
+                            .values_list('d', flat=True)
+                            .distinct()
+                            .order_by('-d')[:10])
+            dias = list(ultimos_dias)
+            if dias:
+                entradas = (entradas
+                            .filter(**{f'{data_field}__date__in': dias})
+                            .only('id', 'quantidade',
+                                  'produto__nome', 'bar__nome',
+                                  'usuario__username', data_field))
+                # agrupa em memória
+                tmp = defaultdict(list)
+                for e in entradas:
+                    dia = getattr(e, data_field).date() if data_field else 'Sem data'
+                    tmp[dia].append(e)
+                # ordena as chaves (decrescente)
+                agrupado = dict(sorted(tmp.items(), key=lambda kv: kv[0], reverse=True))
+                next_before = min(dias).isoformat()
+            else:
+                agrupado = {}
+        else:
+            # sem campo de data (raro) — só lista últimos N
+            tmp = defaultdict(list)
+            for e in entradas[:200]:
+                tmp['Sem data'].append(e)
+            agrupado = dict(tmp)
+    else:
+        # Mês/Ano: lista tudo do período (a consulta já veio estreita pelo índice)
+        if data_field:
+            entradas = entradas.annotate(d=TruncDate(data_field))
+            tmp = defaultdict(list)
+            for e in entradas:
+                tmp[e.d].append(e)
+            agrupado = dict(sorted(tmp.items(), key=lambda kv: kv[0], reverse=True))
+        else:
+            tmp = defaultdict(list)
+            for e in entradas:
+                tmp['Sem data'].append(e)
+            agrupado = dict(tmp)
+
+    return render(request, 'core/historico_entradas.html', {
+        'agrupado': agrupado,
+        'now': timezone.now(),
+        'meses': list(range(1, 13)),
+        'data_field': data_field,
+        'next_before': next_before,  # para o botão "Ver dias anteriores"
+    })
+
+
 
 
 @login_required
@@ -622,6 +786,26 @@ def historico_transferencias_view(request):
     })
 
 
+# views.py (trechos relevantes)
+
+from decimal import Decimal, InvalidOperation
+from collections import defaultdict
+from itertools import zip_longest
+from datetime import datetime, time
+
+from django.contrib import messages
+from django.core.paginator import Paginator
+from django.db import transaction
+from django.shortcuts import render, redirect, get_object_or_404
+from django.utils import timezone
+from django.contrib.auth.decorators import login_required
+
+from .models import (
+    Evento, Produto, Alimento, EventoProduto, EventoAlimento,
+    Restaurante, PermissaoPagina
+)
+
+
 @login_required
 def pagina_eventos(request):
     if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='eventos').exists():
@@ -630,26 +814,35 @@ def pagina_eventos(request):
 
     hoje = timezone.localdate()
 
-    # ✅ TRAGA TODOS OS QUE NÃO ESTÃO FINALIZADOS (qualquer data)
-    eventos_abertos = (
+    # Filtro GET ?restaurante=<id>
+    restaurante_param = (request.GET.get('restaurante') or '').strip()
+    try:
+        restaurante_filtro_id = int(restaurante_param) if restaurante_param else None
+    except ValueError:
+        restaurante_filtro_id = None
+
+    eventos_qs = (
         Evento.objects
-        .exclude(status='FINALIZADO')   # em vez de .filter(status='ABERTO')
+        .exclude(status='FINALIZADO')
+        .select_related('restaurante', 'responsavel')
         .prefetch_related('produtos__produto', 'alimentos__alimento')
         .order_by('data_evento', 'data_criacao')
     )
+    if restaurante_filtro_id:
+        eventos_qs = eventos_qs.filter(restaurante_id=restaurante_filtro_id)
 
-    # ✅ Paginação
-    paginator = Paginator(eventos_abertos, 10)  # 10 por página
+    paginator = Paginator(eventos_qs, 10)
     page_number = request.GET.get("page")
     eventos_abertos = paginator.get_page(page_number)
 
-    # ✅ Consolidado: FINALIZADOS "hoje após 06:00"
+    # Consolidado: finalizados hoje após 06:00
     tz = timezone.get_current_timezone()
     start_dt = timezone.make_aware(datetime.combine(hoje, time(6, 0)), tz)
     end_dt   = timezone.make_aware(datetime.combine(hoje, time(23, 59, 59, 999999)), tz)
 
-    finalizados_apos_seis = (
+    finalizados_qs = (
         Evento.objects.filter(status='FINALIZADO', finalizado_em__range=(start_dt, end_dt))
+        .select_related('restaurante')
         .prefetch_related('produtos__produto', 'alimentos__alimento')
         .order_by('-finalizado_em')
     )
@@ -657,7 +850,7 @@ def pagina_eventos(request):
     consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': 0, 'ml': 0})
     consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
 
-    for evento in finalizados_apos_seis:
+    for evento in finalizados_qs:
         for item in evento.produtos.all():
             g = int(item.garrafas or 0)
             d = int(item.doses or 0)
@@ -671,18 +864,20 @@ def pagina_eventos(request):
 
     produtos = Produto.objects.all().order_by('nome')
     alimentos = Alimento.objects.filter(ativo=True).order_by('nome')
+    restaurantes = Restaurante.objects.all().order_by('nome')
 
     return render(request, 'eventos/pagina_eventos.html', {
         'produtos': produtos,
         'alimentos': alimentos,
+        'restaurantes': restaurantes,
         'eventos_abertos': eventos_abertos,
         'paginator': paginator,
         'consolidado_bebidas': dict(consolidado_bebidas),
         'consolidado_alimentos': dict(consolidado_alimentos),
         'hoje': hoje,
         'janela_consolidado_label': "Finalizados hoje após 06:00",
+        'selected_restaurante': restaurante_filtro_id,
     })
-
 
 
 def _to_int_or_zero(val):
@@ -699,7 +894,6 @@ def _to_decimal_or_zero(val):
         q = Decimal(s)
     except (InvalidOperation, ValueError):
         q = Decimal("0")
-    # evita negativos
     if q < 0:
         q = Decimal("0")
     return q
@@ -715,6 +909,7 @@ def criar_evento(request):
     pessoas_raw = (request.POST.get('numero_pessoas') or '').strip()
     horas_raw = (request.POST.get('horas') or '').strip()
     data_evento_raw = (request.POST.get('data_evento') or '').strip()
+    restaurante_id = (request.POST.get('restaurante_id') or '').strip()
 
     # numero_pessoas
     try:
@@ -732,14 +927,19 @@ def criar_evento(request):
     except Exception:
         horas = None
 
-    # data_evento (se não vier, usa hoje)
+    # data_evento
     try:
-        if data_evento_raw:
-            data_evento = datetime.strptime(data_evento_raw, "%Y-%m-%d").date()
-        else:
-            data_evento = timezone.localdate()
+        data_evento = datetime.strptime(data_evento_raw, "%Y-%m-%d").date() if data_evento_raw else timezone.localdate()
     except Exception:
         data_evento = timezone.localdate()
+
+    # restaurante (opcional)
+    restaurante = None
+    if restaurante_id:
+        try:
+            restaurante = Restaurante.objects.get(id=restaurante_id)
+        except Restaurante.DoesNotExist:
+            restaurante = None
 
     evento = Evento.objects.create(
         nome=nome or f"Evento {timezone.localtime(timezone.now()):%d/%m %H:%M}",
@@ -748,28 +948,25 @@ def criar_evento(request):
         horas=horas,
         status='ABERTO',
         data_evento=data_evento,
+        restaurante=restaurante,
     )
 
-    # ---------- Bebidas (podem ser zero) ----------
+    # ---------- Bebidas ----------
     produtos_ids = request.POST.getlist('produto_id[]')
     garrafas_list = request.POST.getlist('garrafas[]')
     doses_list = request.POST.getlist('doses[]')
 
-    # Somar duplicados do mesmo produto
     soma_produtos = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0')})
     for pid, g_raw, d_raw in zip_longest(produtos_ids, garrafas_list, doses_list, fillvalue='0'):
         pid = (pid or '').strip()
         if not pid:
             continue
-        g = _to_int_or_zero(g_raw)
-        d = _to_int_or_zero(d_raw)  # doses inteiras neste fluxo; mude para Decimal se aceitar frações
-        if g < 0: g = 0
-        if d < 0: d = 0
+        g = max(int(g_raw or 0), 0)
+        d = max(int(d_raw or 0), 0)
         soma_produtos[pid]['garrafas'] += g
         soma_produtos[pid]['doses'] += d
 
     if soma_produtos:
-        # carregamento em bloco ajuda performance
         produtos_map = {str(p.id): p for p in Produto.objects.filter(id__in=soma_produtos.keys())}
         for pid, tot in soma_produtos.items():
             produto = produtos_map.get(str(pid))
@@ -782,7 +979,7 @@ def criar_evento(request):
                 doses=int(tot['doses']),
             )
 
-    # ---------- Alimentos (podem ser zero) ----------
+    # ---------- Alimentos ----------
     alimentos_ids = request.POST.getlist('alimento_id[]')
     qts_list = request.POST.getlist('alimento_qtd[]')
 
@@ -791,7 +988,11 @@ def criar_evento(request):
         aid = (aid or '').strip()
         if not aid:
             continue
-        q = _to_decimal_or_zero(q_raw)
+        try:
+            q = Decimal(str(q_raw).replace(',', '.'))
+            if q < 0: q = Decimal('0')
+        except Exception:
+            q = Decimal('0')
         soma_alimentos[aid] += q
 
     if soma_alimentos:
@@ -800,11 +1001,7 @@ def criar_evento(request):
             alimento = alimentos_map.get(str(aid))
             if not alimento:
                 continue
-            EventoAlimento.objects.create(
-                evento=evento,
-                alimento=alimento,
-                quantidade=qtd,   # já clampado a >= 0
-            )
+            EventoAlimento.objects.create(evento=evento, alimento=alimento, quantidade=qtd)
 
     messages.success(request, "Evento cadastrado.")
     return redirect('pagina_eventos')
@@ -812,9 +1009,11 @@ def criar_evento(request):
 
 
 @login_required
+@transaction.atomic
 def editar_evento(request, evento_id):
     evento = get_object_or_404(
-        Evento.objects.prefetch_related('produtos__produto', 'alimentos__alimento'),
+        Evento.objects.select_related('restaurante', 'responsavel')
+              .prefetch_related('produtos__produto', 'alimentos__alimento'),
         id=evento_id
     )
 
@@ -823,12 +1022,11 @@ def editar_evento(request, evento_id):
         return redirect('pagina_eventos')
 
     if request.method == 'POST':
-        # ✅ HORAS DO EVENTO (editar) — só atualiza se o campo vier preenchido
-        horas_raw = (request.POST.get('horas_evento') or '').strip()
-
         update_fields = []
 
-        if horas_raw != '':  # ← se deixou em branco, não mexe no valor já salvo
+        # Horas
+        horas_raw = (request.POST.get('horas_evento') or '').strip()
+        if horas_raw != '':
             try:
                 horas_val = Decimal(horas_raw.replace(',', '.'))
                 if horas_val < 0:
@@ -836,17 +1034,47 @@ def editar_evento(request, evento_id):
                 evento.horas = horas_val
                 update_fields.append('horas')
             except (InvalidOperation, ValueError):
-                # Se inválido, ignore (ou você pode adicionar uma mensagem de erro se preferir)
                 pass
+
+        # Número de pessoas
+        pessoas_raw = (request.POST.get('numero_pessoas_evento') or '').strip()
+        if pessoas_raw != '':
+            try:
+                pessoas_val = int(pessoas_raw)
+                if pessoas_val < 0:
+                    raise ValueError
+                evento.numero_pessoas = pessoas_val
+                update_fields.append('numero_pessoas')
+            except ValueError:
+                pass
+
+        # (Opcional) trocar restaurante na edição:
+        # restaurante_evento_id = (request.POST.get('restaurante_evento') or '').strip()
+        # if restaurante_evento_id != '':
+        #     try:
+        #         evento.restaurante = Restaurante.objects.get(id=int(restaurante_evento_id))
+        #         update_fields.append('restaurante')
+        #     except (Restaurante.DoesNotExist, ValueError):
+        #         pass
 
         if update_fields:
             evento.save(update_fields=update_fields)
 
+        # Remoções
+        del_prod_ids = request.POST.getlist('del_prod[]')
+        if del_prod_ids:
+            EventoProduto.objects.filter(evento=evento, id__in=del_prod_ids).delete()
 
-        # ---------- Atualiza quantidades dos itens existentes ----------
+        del_ali_ids = request.POST.getlist('del_ali[]')
+        if del_ali_ids:
+            EventoAlimento.objects.filter(evento=evento, id__in=del_ali_ids).delete()
+
+        # Atualizações
         for ep in evento.produtos.all():
-            g = request.POST.get(f'prod_g_{ep.id}', '').strip()
-            d = request.POST.get(f'prod_d_{ep.id}', '').strip()
+            if not EventoProduto.objects.filter(id=ep.id).exists():
+                continue
+            g = (request.POST.get(f'prod_g_{ep.id}', '') or '').strip()
+            d = (request.POST.get(f'prod_d_{ep.id}', '') or '').strip()
             try: ep.garrafas = max(int(g or 0), 0)
             except: ep.garrafas = 0
             try: ep.doses = max(int(d or 0), 0)
@@ -854,7 +1082,9 @@ def editar_evento(request, evento_id):
             ep.save()
 
         for ea in evento.alimentos.all():
-            q = request.POST.get(f'ali_q_{ea.id}', '').strip().replace(',', '.')
+            if not EventoAlimento.objects.filter(id=ea.id).exists():
+                continue
+            q = (request.POST.get(f'ali_q_{ea.id}', '') or '').strip().replace(',', '.')
             try:
                 val = Decimal(q or '0')
                 ea.quantidade = val if val >= 0 else Decimal('0')
@@ -862,7 +1092,7 @@ def editar_evento(request, evento_id):
                 ea.quantidade = Decimal('0')
             ea.save()
 
-        # ---------- Adicionar novos itens (opcionais) ----------
+        # Adições
         novo_prod = request.POST.get('novo_produto')
         novo_g = request.POST.get('novo_garrafas')
         novo_d = request.POST.get('novo_doses')
@@ -885,7 +1115,7 @@ def editar_evento(request, evento_id):
             except Exception:
                 pass
 
-        # ---------- Finalização? ----------
+        # Finalização
         if 'finalizar' in request.POST:
             evento.status = 'FINALIZADO'
             evento.finalizado_em = timezone.now()
@@ -894,17 +1124,21 @@ def editar_evento(request, evento_id):
             messages.success(request, "Evento finalizado. Ele agora aparece no consolidado/Excel.")
             return redirect('pagina_eventos')
 
-        messages.success(request, "Alterações salvas (evento permanece ABERTO).")
+        messages.success(request, "Alterações salvas (itens removidos/atualizados).")
         return redirect('editar_evento', evento_id=evento.id)
 
-    # GET
     produtos = Produto.objects.all().order_by('nome')
     alimentos = Alimento.objects.filter(ativo=True).order_by('nome')
     return render(request, 'eventos/editar_evento.html', {
         'evento': evento,
         'produtos': produtos,
         'alimentos': alimentos,
+        # 'restaurantes': Restaurante.objects.all().order_by('nome'),  # se quiser trocar na edição
     })
+
+
+
+
 
 
 
@@ -990,9 +1224,14 @@ def excluir_evento(request, evento_id):
 @login_required
 def dashboard(request):
     bar_id = request.session.get('bar_id')
+    if not bar_id:
+        # se alguém digitar /dashboard sem bar, manda escolher
+        request.session['next_after_select'] = request.path
+        return redirect('selecionar-bar')
+
     bar = get_object_or_404(Bar, id=bar_id)
 
-    # Estoque atual agrupado
+    # Estoque atual
     estoque_qs = EstoqueBar.objects.filter(bar=bar).select_related('produto')
     estoque_agrupado = [
         {
@@ -1003,24 +1242,23 @@ def dashboard(request):
         for e in estoque_qs
     ]
 
-    # Gráfico: Top 5 produtos com maior quantidade no estoque atual (garrafas + doses/10)
+    # Top 5 (garrafas + doses/10)
     estoque_top_qs = sorted(
-    estoque_qs,
-    key=lambda e: e.quantidade_garrafas + (e.quantidade_doses / Decimal('10')),
-    reverse=True
+        estoque_qs,
+        key=lambda e: e.quantidade_garrafas + (e.quantidade_doses / Decimal('10')),
+        reverse=True
     )[:5]
-
     estoque_labels = [e.produto.nome for e in estoque_top_qs]
     estoque_valores = [
         round(e.quantidade_garrafas + (e.quantidade_doses / Decimal('10')), 2)
         for e in estoque_top_qs
     ]
 
-    # Últimas requisições e transferências
+    # Últimas movimentações
     ultimas_requisicoes = RequisicaoProduto.objects.filter(bar=bar).order_by('-data_solicitacao')[:5]
     ultimas_transferencias = TransferenciaBar.objects.filter(origem=bar).order_by('-data_transferencia')[:5]
 
-    # 📊 Gráfico: Produtos mais requisitados
+    # Ranking requisitados
     ranking_qs = (
         RequisicaoProduto.objects
         .filter(bar=bar)
@@ -1036,8 +1274,8 @@ def dashboard(request):
         'estoque': estoque_agrupado,
         'ultimas_requisicoes': ultimas_requisicoes,
         'ultimas_transferencias': ultimas_transferencias,
-        'dias': estoque_labels,             # agora representa produtos do estoque
-        'saidas': estoque_valores,          # agora representa quantidades (garrafas + doses/10)
+        'dias': estoque_labels,
+        'saidas': estoque_valores,
         'ranking_produtos': produtos_ranking,
         'ranking_totais': totais_ranking,
     })
@@ -1673,6 +1911,11 @@ def relatorio_contagem_atual(request):
 
 DOSE_ML = Decimal('50')  # ml por dose
 
+from datetime import date  # se ainda não tiver
+from collections import defaultdict, OrderedDict  # OrderedDict já usado no final
+from django.utils.timezone import localtime       # usado ao montar 'data'
+# DOSE_ML deve existir no seu contexto (ex.: settings ou constante). Mantive como está.
+
 @login_required
 def relatorio_eventos(request):
     # filtros (mês atual por padrão)
@@ -1680,6 +1923,13 @@ def relatorio_eventos(request):
     data_fim_param = request.GET.get('data_fim')
     nome_evento = (request.GET.get('nome_evento') or "").strip()
     somente_nao_baixados = request.GET.get('pendentes') == '1'
+
+    # 🔹 NOVO: filtro por restaurante
+    restaurante_param = (request.GET.get('restaurante') or '').strip()
+    try:
+        restaurante_filtro_id = int(restaurante_param) if restaurante_param else None
+    except ValueError:
+        restaurante_filtro_id = None
 
     if data_inicio_param and data_fim_param:
         try:
@@ -1695,14 +1945,16 @@ def relatorio_eventos(request):
     eventos_qs = (
         Evento.objects
         .filter(data_criacao__date__range=(data_inicio, data_fim))
-        .prefetch_related('produtos__produto', 'alimentos__alimento')  # ✅ agora traz alimentos também
-        .select_related('responsavel', 'supervisor_finalizou', 'baixado_por')
+        .prefetch_related('produtos__produto', 'alimentos__alimento')
+        .select_related('responsavel', 'supervisor_finalizou', 'baixado_por', 'restaurante')  # 👈 inclui restaurante
         .order_by('-data_criacao')
     )
     if nome_evento:
         eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
     if somente_nao_baixados:
         eventos_qs = eventos_qs.filter(baixado_estoque=False, status='FINALIZADO')
+    if restaurante_filtro_id:
+        eventos_qs = eventos_qs.filter(restaurante_id=restaurante_filtro_id)
 
     # ✅ dois consolidados: bebidas e alimentos
     consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
@@ -1748,6 +2000,7 @@ def relatorio_eventos(request):
             # ✅ novos campos:
             'pessoas': ev.numero_pessoas,
             'horas': ev.horas,
+            'restaurante_nome': ev.restaurante.nome if getattr(ev, 'restaurante', None) else None,  # 👈 para exibir facilmente
             # blocos:
             'itens_bebidas': itens_bebidas,
             'totais_bebidas': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
@@ -1759,15 +2012,21 @@ def relatorio_eventos(request):
     consolidado_bebidas = OrderedDict(sorted(consolidado_bebidas.items(), key=lambda kv: kv[0].lower()))
     consolidado_alimentos = OrderedDict(sorted(consolidado_alimentos.items(), key=lambda kv: kv[0].lower()))
 
+    # 🔹 lista para o dropdown
+    restaurantes = Restaurante.objects.all().order_by('nome')
+
     return render(request, 'core/relatorios/relatorio_eventos.html', {
         'eventos': eventos,
-        'consolidado_bebidas': consolidado_bebidas,   # ✅
-        'consolidado_alimentos': consolidado_alimentos,  # ✅
+        'consolidado_bebidas': consolidado_bebidas,
+        'consolidado_alimentos': consolidado_alimentos,
         'data_inicio': data_inicio,
         'data_fim': data_fim,
         'nome_evento': nome_evento,
         'somente_nao_baixados': '1' if somente_nao_baixados else '',
+        'restaurantes': restaurantes,                    # 👈 para o filtro
+        'selected_restaurante': restaurante_filtro_id,   # 👈 para marcar selecionado
     })
+
 
 
 @login_required
@@ -2113,6 +2372,13 @@ def exportar_relatorio_eventos_excel(request):
     data_fim_str = request.GET.get('data_fim') or ""
     nome_evento = (request.GET.get('nome_evento') or "").strip()
 
+    # 🔹 filtro por restaurante
+    restaurante_param = (request.GET.get('restaurante') or '').strip()
+    try:
+        restaurante_filtro_id = int(restaurante_param) if restaurante_param else None
+    except ValueError:
+        restaurante_filtro_id = None
+
     # Período padrão (mês atual)
     if data_inicio_str and data_fim_str:
         try:
@@ -2129,28 +2395,43 @@ def exportar_relatorio_eventos_excel(request):
         Evento.objects
         .filter(data_criacao__date__range=(data_inicio, data_fim))
         .prefetch_related('produtos__produto', 'alimentos__alimento')
-        .select_related('responsavel')
+        .select_related('responsavel', 'restaurante')
         .order_by('-data_criacao')
     )
     if nome_evento:
         eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
+    if restaurante_filtro_id:
+        eventos_qs = eventos_qs.filter(restaurante_id=restaurante_filtro_id)
+
+    # Texto do filtro
+    filtro_txt = f"Período: {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
+    if nome_evento:
+        filtro_txt += f" | Evento contém: {nome_evento}"
+    if restaurante_filtro_id:
+        try:
+            rnome = Restaurante.objects.only('nome').get(id=restaurante_filtro_id).nome
+            filtro_txt += f" | Restaurante: {rnome}"
+        except Restaurante.DoesNotExist:
+            filtro_txt += " | Restaurante: (inválido)"
 
     # Consolidações
     consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
     consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
 
-    # Linhas detalhadas (uma por item)
-    detalhado = []  # cada linha terá: evento, data, pessoas, horas, tipo, item, garrafas, doses, ml, quantidade, unidade
+    # Linhas detalhadas
+    detalhado = []  # Evento, Restaurante, Data, Pessoas, Horas, Tipo, Item, Garrafas, Doses, ML, Quantidade, Unidade
 
-    # Agrupado por evento para a aba "Por Evento"
+    # Agrupado por evento (para as abas "Por Evento" e "Eventos (lista)")
     eventos_group = []
 
     for ev in eventos_qs:
         total_g = 0
         total_d = Decimal('0')
         total_ml = Decimal('0')
+        total_qtd_alimentos_evento = Decimal('0')
         itens_ev_bebidas = []
         itens_ev_alimentos = []
+        rnome = ev.restaurante.nome if getattr(ev, 'restaurante', None) else None
 
         # ---- Bebidas
         for item in ev.produtos.all():
@@ -2159,14 +2440,13 @@ def exportar_relatorio_eventos_excel(request):
             dos = Decimal(item.doses or 0)
             ml = dos * DOSE_ML
 
-            # Consolida
             consolidado_bebidas[prod]['garrafas'] += gar
             consolidado_bebidas[prod]['doses'] += dos
             consolidado_bebidas[prod]['ml'] += ml
 
-            # Detalhado
             detalhado.append({
                 'evento': ev.nome,
+                'restaurante': rnome,
                 'data': localtime(ev.data_criacao),
                 'pessoas': ev.numero_pessoas,
                 'horas': ev.horas,
@@ -2179,7 +2459,6 @@ def exportar_relatorio_eventos_excel(request):
                 'unidade': None,
             })
 
-            # Por evento
             itens_ev_bebidas.append({'produto': prod, 'garrafas': gar, 'doses': dos, 'ml': ml})
             total_g += gar
             total_d += dos
@@ -2191,13 +2470,12 @@ def exportar_relatorio_eventos_excel(request):
             qtd = Decimal(ali.quantidade or 0)
             uni = ali.alimento.unidade or ''
 
-            # Consolida
             consolidado_alimentos[nome]['quantidade'] += qtd
             consolidado_alimentos[nome]['unidade'] = uni
 
-            # Detalhado
             detalhado.append({
                 'evento': ev.nome,
+                'restaurante': rnome,
                 'data': localtime(ev.data_criacao),
                 'pessoas': ev.numero_pessoas,
                 'horas': ev.horas,
@@ -2210,8 +2488,8 @@ def exportar_relatorio_eventos_excel(request):
                 'unidade': uni,
             })
 
-            # Por evento
             itens_ev_alimentos.append({'alimento': nome, 'quantidade': qtd, 'unidade': uni})
+            total_qtd_alimentos_evento += qtd
 
         eventos_group.append({
             'nome': ev.nome,
@@ -2219,9 +2497,13 @@ def exportar_relatorio_eventos_excel(request):
             'responsavel': getattr(ev, 'responsavel', ''),
             'pessoas': ev.numero_pessoas,
             'horas': ev.horas,
+            'restaurante_nome': rnome,
+            'status': ev.status,
+            'baixado': ev.baixado_estoque,
             'itens_bebidas': itens_ev_bebidas,
             'totais_bebidas': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
             'itens_alimentos': itens_ev_alimentos,
+            'total_alimentos_qtd': total_qtd_alimentos_evento,  # 👈 para a aba de lista
         })
 
     # === Workbook
@@ -2234,9 +2516,6 @@ def exportar_relatorio_eventos_excel(request):
     ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
     ws1.cell(row=1, column=1, value="Relatório de Eventos — Consolidado de Bebidas").font = Font(bold=True, size=14)
 
-    filtro_txt = f"Período: {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
-    if nome_evento:
-        filtro_txt += f" | Evento contém: {nome_evento}"
     ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
     ws1.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
 
@@ -2291,15 +2570,15 @@ def exportar_relatorio_eventos_excel(request):
 
     # ===================== Aba 3: Detalhado =====================
     ws2 = wb.create_sheet("Detalhado")
-    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=11)
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
     ws2.cell(row=1, column=1, value="Relatório de Eventos — Detalhado (Bebidas e Alimentos)").font = Font(bold=True, size=14)
 
-    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=11)
+    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=12)
     ws2.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
 
     ws2.append([])
     ws2.append([
-        "Evento", "Data", "Pessoas", "Horas", "Tipo", "Item",
+        "Evento", "Restaurante", "Data", "Pessoas", "Horas", "Tipo", "Item",
         "Garrafas", "Doses", "Doses (ML)", "Quantidade", "Unidade"
     ])
     style_header_row(ws2, 4)
@@ -2307,44 +2586,36 @@ def exportar_relatorio_eventos_excel(request):
     r2 = 5
     for linha in detalhado:
         ws2.cell(row=r2, column=1, value=linha['evento'])
-        ws2.cell(row=r2, column=2, value=linha['data'].strftime("%d/%m/%Y %H:%M"))
+        ws2.cell(row=r2, column=2, value=linha['restaurante'] or "-")
+        ws2.cell(row=r2, column=3, value=linha['data'].strftime("%d/%m/%Y %H:%M"))
 
-        # Pessoas
         if linha['pessoas'] is not None:
-            ws2.cell(row=r2, column=3, value=int(linha['pessoas'])).number_format = "0"
-        else:
-            ws2.cell(row=r2, column=3, value=None)
-
-        # Horas
+            ws2.cell(row=r2, column=4, value=int(linha['pessoas'])).number_format = "0"
         if linha['horas'] is not None:
             try:
-                ws2.cell(row=r2, column=4, value=float(linha['horas'])).number_format = "0.00"
+                ws2.cell(row=r2, column=5, value=float(linha['horas'])).number_format = "0.00"
             except Exception:
-                ws2.cell(row=r2, column=4, value=None)
-        else:
-            ws2.cell(row=r2, column=4, value=None)
+                pass
 
-        ws2.cell(row=r2, column=5, value=linha['tipo'])
-        ws2.cell(row=r2, column=6, value=linha['item'])
+        ws2.cell(row=r2, column=6, value=linha['tipo'])
+        ws2.cell(row=r2, column=7, value=linha['item'])
 
-        # Bebidas
         if linha['garrafas'] is not None:
-            ws2.cell(row=r2, column=7, value=int(linha['garrafas'])).number_format = "0"
+            ws2.cell(row=r2, column=8, value=int(linha['garrafas'])).number_format = "0"
         if linha['doses'] is not None:
-            ws2.cell(row=r2, column=8, value=float(linha['doses'])).number_format = "0.00"
+            ws2.cell(row=r2, column=9, value=float(linha['doses'])).number_format = "0.00"
         if linha['ml'] is not None:
-            ws2.cell(row=r2, column=9, value=float(linha['ml'])).number_format = "0.00"
+            ws2.cell(row=r2, column=10, value=float(linha['ml'])).number_format = "0.00"
 
-        # Alimentos
         if linha['quantidade'] is not None:
-            ws2.cell(row=r2, column=10, value=float(linha['quantidade'])).number_format = "0.00"
+            ws2.cell(row=r2, column=11, value=float(linha['quantidade'])).number_format = "0.00"
         if linha['unidade'] is not None:
-            ws2.cell(row=r2, column=11, value=linha['unidade'])
+            ws2.cell(row=r2, column=12, value=linha['unidade'])
 
         r2 += 1
 
     ws2.freeze_panes = "A5"
-    style_body_borders(ws2, 5, r2 - 1, 1, 11)
+    style_body_borders(ws2, 5, r2 - 1, 1, 12)
     auto_fit(ws2)
 
     # ===================== Aba 4: Por Evento =====================
@@ -2353,16 +2624,14 @@ def exportar_relatorio_eventos_excel(request):
     col_count = 8
     current_row = 1
 
-    # Título geral
     ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
     ws3.cell(row=current_row, column=1, value="Relatório de Eventos — Por Evento").font = Font(bold=True, size=14)
     current_row += 1
     ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
     ws3.cell(row=current_row, column=1, value=filtro_txt).font = Font(italic=True, size=11)
-    current_row += 2  # linha em branco
+    current_row += 2
 
     for ev in eventos_group:
-        # Cabeçalho do bloco (com Pessoas/Horas)
         ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
         cab = f"Evento: {ev['nome']}  |  Data: {ev['data'].strftime('%d/%m/%Y %H:%M')}"
         if ev['responsavel']:
@@ -2374,17 +2643,14 @@ def exportar_relatorio_eventos_excel(request):
                 cab += f"  |  Horas: {float(ev['horas']):.2f}"
             except Exception:
                 cab += "  |  Horas: -"
+        if ev.get('restaurante_nome'):
+            cab += f"  |  Restaurante: {ev['restaurante_nome']}"
         ws3.cell(row=current_row, column=1, value=cab).font = Font(bold=True, size=12)
         current_row += 1
 
-        # ===== Tabela Bebidas =====
-        ws3.append([])
-        current_row += 1
-        ws3.append(["🍹 Bebidas", "", "", "", "", "", "", ""])
-        style_header_row(ws3, current_row)
-        current_row += 1
-        ws3.append(["Produto", "Garrafas", "Doses", "Doses (ML)", "", "", "", ""])
-        style_header_row(ws3, current_row)
+        ws3.append([]); current_row += 1
+        ws3.append(["🍹 Bebidas", "", "", "", "", "", "", ""]); style_header_row(ws3, current_row); current_row += 1
+        ws3.append(["Produto", "Garrafas", "Doses", "Doses (ML)", "", "", "", ""]); style_header_row(ws3, current_row)
         first_data_beb = current_row + 1
 
         for it in ev['itens_bebidas']:
@@ -2394,7 +2660,6 @@ def exportar_relatorio_eventos_excel(request):
             ws3.cell(row=current_row, column=3, value=float(it['doses'])).number_format = "0.00"
             ws3.cell(row=current_row, column=4, value=float(it['ml'])).number_format = "0.00"
 
-        # Subtotal bebidas
         current_row += 1
         ws3.cell(row=current_row, column=1, value="Subtotal (bebidas)").font = Font(bold=True)
         ws3.cell(row=current_row, column=2, value=int(ev['totais_bebidas']['garrafas'])).number_format = "0"
@@ -2402,13 +2667,9 @@ def exportar_relatorio_eventos_excel(request):
         ws3.cell(row=current_row, column=4, value=float(ev['totais_bebidas']['ml'])).number_format = "0.00"
         style_body_borders(ws3, first_data_beb, current_row, 1, 4)
 
-        # ===== Tabela Alimentos =====
         current_row += 2
-        ws3.append([])
-        style_header_row(ws3, current_row)
-        current_row += 1
-        ws3.append(["Alimento", "Quantidade", "Unidade", "", "", "", "", ""])
-        style_header_row(ws3, current_row)
+        ws3.append([]); style_header_row(ws3, current_row); current_row += 1
+        ws3.append(["Alimento", "Quantidade", "Unidade", "", "", "", "", ""]); style_header_row(ws3, current_row)
         first_data_ali = current_row + 1
 
         if ev['itens_alimentos']:
@@ -2422,10 +2683,59 @@ def exportar_relatorio_eventos_excel(request):
             current_row += 1
             ws3.cell(row=current_row, column=1, value="Sem lançamentos de alimentos.").font = Font(italic=True)
 
-        # Espaço entre eventos
         current_row += 2
 
     auto_fit(ws3)
+
+    # ===================== Aba 5: Eventos (lista) =====================
+    wsL = wb.create_sheet("Eventos (lista)")
+
+    wsL.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
+    wsL.cell(row=1, column=1, value="Relatório de Eventos — Lista").font = Font(bold=True, size=14)
+
+    wsL.merge_cells(start_row=2, start_column=1, end_row=2, end_column=12)
+    wsL.cell(row=2, column=1, value=filtro_txt).font = Font(italic=True, size=11)
+
+    wsL.append([])
+    wsL.append([
+        "Evento", "Restaurante", "Data", "Status", "Baixado?",
+        "Responsável", "Pessoas", "Horas",
+        "Garrafas (tot)", "Doses (tot)", "ML (tot)", "Alimentos (qtd tot)"
+    ])
+    style_header_row(wsL, 4)
+
+    rL = 5
+    for ev in eventos_group:
+        wsL.cell(row=rL, column=1, value=ev['nome'])
+        wsL.cell(row=rL, column=2, value=ev['restaurante_nome'] or "-")
+        wsL.cell(row=rL, column=3, value=ev['data'].strftime("%d/%m/%Y %H:%M"))
+        wsL.cell(row=rL, column=4, value=ev['status'])
+        wsL.cell(row=rL, column=5, value="Sim" if ev['baixado'] else "Não")
+        wsL.cell(row=rL, column=6, value=str(ev['responsavel']) if ev['responsavel'] else "-")
+
+        if ev.get('pessoas') is not None:
+            wsL.cell(row=rL, column=7, value=int(ev['pessoas'])).number_format = "0"
+        if ev.get('horas') is not None:
+            try:
+                wsL.cell(row=rL, column=8, value=float(ev['horas'])).number_format = "0.00"
+            except Exception:
+                pass
+
+        wsL.cell(row=rL, column=9,  value=int(ev['totais_bebidas']['garrafas'])).number_format = "0"
+        wsL.cell(row=rL, column=10, value=float(ev['totais_bebidas']['doses'])).number_format = "0.00"
+        wsL.cell(row=rL, column=11, value=float(ev['totais_bebidas']['ml'])).number_format = "0.00"
+        wsL.cell(row=rL, column=12, value=float(ev['total_alimentos_qtd'])).number_format = "0.00"
+
+        rL += 1
+
+    # Linha de total de eventos
+    wsL.append([])
+    wsL.cell(row=rL + 1, column=1, value="Total de eventos").font = Font(bold=True)
+    wsL.cell(row=rL + 1, column=2, value=len(eventos_group)).number_format = "0"
+
+    wsL.freeze_panes = "A5"
+    style_body_borders(wsL, 5, rL - 1, 1, 12)
+    auto_fit(wsL)
 
     # === Output
     output = BytesIO()
@@ -2439,6 +2749,8 @@ def exportar_relatorio_eventos_excel(request):
     )
     resp['Content-Disposition'] = f'attachment; filename="{fname}"'
     return resp
+
+
 
 
 

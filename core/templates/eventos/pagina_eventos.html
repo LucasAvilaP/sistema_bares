@@ -22,6 +22,20 @@
     </div>
 
     <div class="row g-3 mb-3">
+      <!-- NOVO: restaurante do evento -->
+      <div class="col-md-4">
+        <label class="form-label">Restaurante</label>
+        <select name="restaurante_id" class="form-select">
+          <option value="">Não vincular</option>
+          {% if restaurantes %}
+            {% for r in restaurantes %}
+              <option value="{{ r.id }}">{{ r.nome }}</option>
+            {% endfor %}
+          {% endif %}
+        </select>
+        <div class="form-text">Identifica a qual restaurante o evento pertence.</div>
+      </div>
+
       <div class="col-md-4">
         <label class="form-label">Data do evento (opcional)</label>
         <input type="date" name="data_evento" class="form-control" value="{{ hoje|date:'Y-m-d' }}">
@@ -30,6 +44,9 @@
         <label class="form-label">Nº de pessoas</label>
         <input type="number" name="numero_pessoas" class="form-control" min="1" step="1" placeholder="ex.: 80">
       </div>
+    </div>
+
+    <div class="row g-3 mb-3">
       <div class="col-md-4">
         <label class="form-label">Horas</label>
         <input type="number" name="horas" class="form-control" min="0.5" step="0.5" placeholder="ex.: 4 ou 3,5">
@@ -154,8 +171,30 @@
 
   <hr class="my-5">
 
-  <!-- ====================== LISTA DE EVENTOS ABERTOS (com paginação) ====================== -->
-  <h4 class="mb-3">📅 Eventos Abertos</h4>
+  <!-- ====================== LISTA DE EVENTOS ABERTOS (com filtro + paginação) ====================== -->
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+    <h4 class="mb-0">📅 Eventos Abertos</h4>
+
+    <!-- NOVO: filtro por restaurante (GET) -->
+    <form method="get" class="d-flex align-items-center gap-2">
+      <label for="f-rest" class="form-label mb-0">Restaurante:</label>
+      <select id="f-rest" name="restaurante" class="form-select" onchange="this.form.submit()">
+        <option value="">Todos</option>
+        {% if restaurantes %}
+          {% with sel=request.GET.restaurante|default:selected_restaurante %}
+            {% for r in restaurantes %}
+              <option value="{{ r.id }}" {% if sel|stringformat:'s' == r.id|stringformat:'s' %}selected{% endif %}>
+                {{ r.nome }}
+              </option>
+            {% endfor %}
+          {% endwith %}
+        {% endif %}
+      </select>
+      {% if request.GET.restaurante %}
+        <a class="btn btn-outline-secondary" href="{% url 'pagina_eventos' %}">Limpar</a>
+      {% endif %}
+    </form>
+  </div>
 
   {% if eventos_abertos %}
     {% for evento in eventos_abertos %}
@@ -164,6 +203,9 @@
           <div>
             <strong>{{ evento.nome }}</strong>
             — 📆 {{ evento.data_evento|date:"d/m/Y" }}
+            {% if evento.restaurante %}
+              <span class="badge bg-info text-dark ms-1">🏛️ {{ evento.restaurante.nome }}</span>
+            {% endif %}
             {% if evento.numero_pessoas %} • 👥 {{ evento.numero_pessoas }}{% endif %}
             {% if evento.horas %} • ⏱️ {{ evento.horas }} h{% endif %}
             — criado {{ evento.data_criacao|date:"d/m H:i" }} por {{ evento.responsavel }}
@@ -197,15 +239,15 @@
       </div>
     {% endfor %}
 
-    <!-- ===== Paginação Bootstrap ===== -->
+    <!-- ===== Paginação Bootstrap (preserva filtro restaurante) ===== -->
     <nav aria-label="Navegação de páginas" class="mt-3">
       <ul class="pagination">
         {% if eventos_abertos.has_previous %}
           <li class="page-item">
-            <a class="page-link" href="?page=1" aria-label="Primeira">&laquo;&laquo;</a>
+            <a class="page-link" href="?page=1{% if request.GET.restaurante %}&restaurante={{ request.GET.restaurante }}{% endif %}" aria-label="Primeira">&laquo;&laquo;</a>
           </li>
           <li class="page-item">
-            <a class="page-link" href="?page={{ eventos_abertos.previous_page_number }}" aria-label="Anterior">&laquo;</a>
+            <a class="page-link" href="?page={{ eventos_abertos.previous_page_number }}{% if request.GET.restaurante %}&restaurante={{ request.GET.restaurante }}{% endif %}" aria-label="Anterior">&laquo;</a>
           </li>
         {% else %}
           <li class="page-item disabled"><span class="page-link">&laquo;&laquo;</span></li>
@@ -218,17 +260,19 @@
             {% if num == eventos_abertos.number %}
               <li class="page-item active"><span class="page-link">{{ num }}</span></li>
             {% else %}
-              <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+              <li class="page-item">
+                <a class="page-link" href="?page={{ num }}{% if request.GET.restaurante %}&restaurante={{ request.GET.restaurante }}{% endif %}">{{ num }}</a>
+              </li>
             {% endif %}
           {% endif %}
         {% endfor %}
 
         {% if eventos_abertos.has_next %}
           <li class="page-item">
-            <a class="page-link" href="?page={{ eventos_abertos.next_page_number }}" aria-label="Próxima">&raquo;</a>
+            <a class="page-link" href="?page={{ eventos_abertos.next_page_number }}{% if request.GET.restaurante %}&restaurante={{ request.GET.restaurante }}{% endif %}" aria-label="Próxima">&raquo;</a>
           </li>
           <li class="page-item">
-            <a class="page-link" href="?page={{ eventos_abertos.paginator.num_pages }}" aria-label="Última">&raquo;&raquo;</a>
+            <a class="page-link" href="?page={{ eventos_abertos.paginator.num_pages }}{% if request.GET.restaurante %}&restaurante={{ request.GET.restaurante }}{% endif %}" aria-label="Última">&raquo;&raquo;</a>
           </li>
         {% else %}
           <li class="page-item disabled"><span class="page-link">&raquo;</span></li>
@@ -313,7 +357,7 @@
       templateSelection: templateSelectionComCodigo
     });
 
-    // Dica dinâmica de unidade nos alimentos
+    // Dica dinâmica de unidade nos alimentos (se quiser exibir algo no hint futuramente)
     $('#alimento-select').on('change', function(){
       const opt = this.options[this.selectedIndex];
       const unidade = opt ? opt.getAttribute('data-unidade') : '';

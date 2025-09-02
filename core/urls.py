@@ -24,6 +24,7 @@ urlpatterns = [
 
     # Entrada / Transferências
     path('entrada-mercadorias/', views.entrada_mercadorias_view, name='entrada-mercadorias'),
+    path('historico/entradas/', views.historico_entradas_view, name='historico-entradas'),
     path('transferencias/entre-bares/', views.transferencia_entre_bares_view, name='transferencia-bares'),
     path('transferencias/historico/', views.historico_transferencias_view, name='historico_transferencias'),
 

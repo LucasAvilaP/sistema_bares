@@ -25,6 +25,18 @@
       <label class="form-label">Nome do Evento</label>
       <input type="text" name="nome_evento" class="form-control" placeholder="Ex: Aniversário, Festa..." value="{{ nome_evento }}">
     </div>
+
+    <!-- 🔹 NOVO: filtro por restaurante -->
+    <div class="col-md-4">
+      <label class="form-label">Restaurante</label>
+      <select name="restaurante" class="form-select">
+        <option value="">Todos</option>
+        {% for r in restaurantes %}
+          <option value="{{ r.id }}" {% if selected_restaurante == r.id %}selected{% endif %}>{{ r.nome }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <div class="col-md-2 d-flex align-items-end">
       <button type="submit" class="btn btn-primary w-100">🔎 Filtrar</button>
     </div>
@@ -40,7 +52,7 @@
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h5 class="mb-0">📦 Consolidado do Período</h5>
       <a
-        href="{% url 'exportar_relatorio_eventos_excel' %}?data_inicio={{ data_inicio|date:'Y-m-d' }}&data_fim={{ data_fim|date:'Y-m-d' }}&nome_evento={{ nome_evento|urlencode }}&pendentes={{ somente_nao_baixados }}"
+        href="{% url 'exportar_relatorio_eventos_excel' %}?data_inicio={{ data_inicio|date:'Y-m-d' }}&data_fim={{ data_fim|date:'Y-m-d' }}&nome_evento={{ nome_evento|urlencode }}&pendentes={{ somente_nao_baixados }}&restaurante={{ selected_restaurante }}"
         class="btn btn-success"
       >📥 Exportar Relatório para Excel</a>
     </div>
@@ -117,6 +129,9 @@
               <strong>{{ ev.nome }}</strong>
               — {{ e.data|date:"d/m/Y H:i" }}
               {% if e.responsavel %} por {{ e.responsavel }}{% endif %}
+              {% if e.restaurante_nome %}
+                <span class="badge bg-info text-dark ms-1">🏛️ {{ e.restaurante_nome }}</span>
+              {% endif %}
             </div>
             <div class="d-flex flex-wrap gap-2">
               {% if ev.status == "FINALIZADO" %}
@@ -146,7 +161,7 @@
           </div>
         </div>
 
-        <!-- 🔹 Linha de ação (observação + botão) -->
+        <!-- Linha de ação -->
         {% if ev.status == "FINALIZADO" %}
           <div class="px-3 py-2 border-bottom">
             {% if not ev.baixado_estoque %}
