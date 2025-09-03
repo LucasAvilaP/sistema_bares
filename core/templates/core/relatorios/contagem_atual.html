@@ -3,77 +3,160 @@
 {% load humanize %}
 
 {% block content %}
-<h2 class="text-2xl font-bold mb-4">📊 Relatório de Contagem Atual — {{ restaurante.nome }}</h2>
 
-<form method="get" action="{% url 'exportar_contagem_atual_excel' %}" class="mb-6">
-    <button type="submit" class="bg-black text-white px-4 py-2 rounded shadow">
-        ⬇️ Exportar para Excel
-    </button>
+<!-- Título -->
+<h2 class="text-3xl font-bold mb-3">
+  📊 Relatório de Contagem
+  {% if use_range %}
+    — {% if modo == 'operacional' %}Dia Operacional{% else %}Calendário{% endif %}
+    {% if inicio_periodo %}<span class="text-slate-500 font-normal"> ({{ inicio_periodo|date:"d/m/Y H:i" }} → {{ fim_periodo|date:"d/m/Y H:i" }})</span>{% endif %}
+  {% else %}
+    — <span class="text-slate-500 font-normal">Contagem Atual</span>
+  {% endif %}
+  — {{ restaurante.nome }}
+</h2>
+
+<!-- ===== Card de Filtro/Ações ===== -->
+<div class="filter-card mb-6">
+  <form method="get" class="filter-grid">
+    <!-- Data -->
+    <div class="field">
+      <label class="label">Data</label>
+      <input type="date" name="data" value="{{ filtro_data }}" class="input">
+    </div>
+
+    <!-- Modo -->
+    <div class="field">
+      <label class="label">Modo</label>
+      <div class="radio-group">
+        <label class="radio">
+          <input type="radio" name="modo" value="operacional" {% if modo != 'calendario' %}checked{% endif %}>
+          <span>Dia Operacional</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="modo" value="calendario" {% if modo == 'calendario' %}checked{% endif %}>
+          <span>Calendário</span>
+        </label>
+      </div>
+      <small class="hint">Dia operacional: {{ SHIFT_START_HOUR }}h → {{ SHIFT_START_HOUR }}h do dia seguinte.</small>
+    </div>
+
+    <!-- Ações -->
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">🔎 Filtrar</button>
+      {% if use_range %}
+        <a href="{% url 'relatorio_contagem_atual' %}" class="btn btn-ghost">Limpar filtro</a>
+      {% endif %}
+      <!-- Exportar usando o form oculto abaixo (preserva filtros) -->
+      <button type="submit" form="export-form" class="btn btn-dark">⬇️ Exportar para Excel</button>
+    </div>
+  </form>
+
+  {% if use_range %}
+    <div class="badge mt-3">
+      <span>Período aplicado:</span>
+      <strong>{{ inicio_periodo|date:"d/m/Y H:i" }}</strong>
+      <span>→</span>
+      <strong>{{ fim_periodo|date:"d/m/Y H:i" }}</strong>
+    </div>
+  {% endif %}
+</div>
+
+<!-- Form oculto só para o Exportar (mantém os parâmetros atuais) -->
+<form id="export-form" method="get" action="{% url 'exportar_contagem_atual_excel' %}">
+  {% if filtro_data %}<input type="hidden" name="data" value="{{ filtro_data }}">{% endif %}
+  <input type="hidden" name="modo" value="{{ modo }}">
 </form>
-<br/>
 
 {% if somatorio_total %}
-    <h3 class="text-xl font-semibold mt-6 mb-2 border-b border-gray-300 pb-1 text-green-700">📦 Total por Produto no Restaurante</h3>
-    <table class="table-auto w-full border-collapse border border-green-500 mb-6">
-        <thead class="bg-green-100">
-            <tr>
-                <th class="border px-4 py-2">Produto</th>
-                <th class="border px-4 py-2">Total de Garrafas</th>
-                <th class="border px-4 py-2">Total de Doses</th>
-                <th class="border px-4 py-2">Total de Doses (ML)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for item in somatorio_total.values %}
-                <tr>
-                    <td class="border px-4 py-2">{{ item.produto.nome }}</td>
-                    <td class="border px-4 py-2">{{ item.garrafas }}</td>
-                    <td class="border px-4 py-2">{{ item.doses|floatformat:2 }}</td>
-                    <td class="border px-4 py-2">{{ item.doses|floatval|mul:50|floatformat:2 }}</td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+  <h3 class="text-xl font-semibold mt-6 mb-2 border-b border-gray-300 pb-1 text-green-700">📦 Total por Produto no Restaurante</h3>
+  <table class="table-auto w-full border-collapse border border-green-500 mb-6">
+    <thead class="bg-green-100">
+      <tr>
+        <th class="border px-4 py-2">Produto</th>
+        <th class="border px-4 py-2">Total de Garrafas</th>
+        <th class="border px-4 py-2">Total de Doses</th>
+        <th class="border px-4 py-2">Total de Doses (ML)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in somatorio_total.values %}
+        <tr>
+          <td class="border px-4 py-2">{{ item.produto.nome }}</td>
+          <td class="border px-4 py-2">{{ item.garrafas }}</td>
+          <td class="border px-4 py-2">{{ item.doses|floatformat:2 }}</td>
+          <td class="border px-4 py-2">{{ item.doses|floatval|mul:50|floatformat:2 }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 {% endif %}
-{% if dados_por_bar %}
-    {% for bar, contagens in dados_por_bar.items %}
-    <br/>
-        <h3 class="text-lg font-semibold mt-6 mb-2 border-b border-gray-300 pb-1">
-            🍺 {{ bar }} — {{ contagens|length }} produto(s)
-        </h3>
 
-        <table class="table-auto w-full border-collapse border border-gray-300 mb-6">
-            <thead class="bg-gray-100">
-                <tr>
-                    <th class="border px-4 py-2">Produto</th>
-                    <th class="border px-4 py-2">Garrafas</th>
-                    <th class="border px-4 py-2">Doses</th>
-                    <th class="border px-4 py-2">Doses (ML)</th>
-                    <th class="border px-4 py-2">Data da Contagem</th>
-                    <th class="border px-4 py-2">Usuário</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for contagem in contagens %}
-                    <tr>
-                        <td class="border px-4 py-2">{{ contagem.produto.nome }}</td>
-                        <td class="border px-4 py-2">{{ contagem.quantidade_garrafas_cheias }}</td>
-                        <td class="border px-4 py-2">{{ contagem.quantidade_doses_restantes|floatformat:2 }}</td>
-                        <td class="border px-4 py-2">
-                            {% if contagem.quantidade_doses_restantes %}
-                                {{ contagem.quantidade_doses_restantes|floatval|mul:50|floatformat:2 }}
-                            {% else %}
-                                0,00
-                            {% endif %}
-                        </td>
-                        <td class="border px-4 py-2">{{ contagem.data_contagem|date:"d/m/Y H:i" }}</td>
-                        <td class="border px-4 py-2">{{ contagem.usuario.username }}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% endfor %}
+{% if dados_por_bar %}
+  {% for bar, contagens in dados_por_bar.items %}
+    <br/>
+    <h3 class="text-lg font-semibold mt-6 mb-2 border-b border-gray-300 pb-1">
+      🍺 {{ bar }} — {{ contagens|length }} produto(s)
+    </h3>
+
+    <table class="table-auto w-full border-collapse border border-gray-300 mb-6">
+      <thead class="bg-gray-100">
+        <tr>
+          <th class="border px-4 py-2">Produto</th>
+          <th class="border px-4 py-2">Garrafas</th>
+          <th class="border px-4 py-2">Doses</th>
+          <th class="border px-4 py-2">Doses (ML)</th>
+          <th class="border px-4 py-2">Data da Contagem</th>
+          <th class="border px-4 py-2">Usuário</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for contagem in contagens %}
+          <tr>
+            <td class="border px-4 py-2">{{ contagem.produto.nome }}</td>
+            <td class="border px-4 py-2">{{ contagem.quantidade_garrafas_cheias }}</td>
+            <td class="border px-4 py-2">{{ contagem.quantidade_doses_restantes|floatformat:2 }}</td>
+            <td class="border px-4 py-2">
+              {% if contagem.quantidade_doses_restantes %}
+                {{ contagem.quantidade_doses_restantes|floatval|mul:50|floatformat:2 }}
+              {% else %}
+                0,00
+              {% endif %}
+            </td>
+            <td class="border px-4 py-2">{{ contagem.data_contagem|date:"d/m/Y H:i" }}</td>
+            <td class="border px-4 py-2">{{ contagem.usuario.username }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
 {% else %}
-    <p class="text-gray-600 mt-4">Nenhuma contagem registrada.</p>
+  <p class="text-gray-600 mt-4">Nenhuma contagem registrada.</p>
 {% endif %}
+
+<!-- ===== Estilos leves do card/controles ===== -->
+<style>
+  .filter-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:16px 18px;
+               box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .filter-grid{display:grid;grid-template-columns:1fr 2fr auto;gap:16px;align-items:end}
+  @media (max-width: 900px){.filter-grid{grid-template-columns:1fr}}
+  .field .label{display:block;font-size:.85rem;color:#374151;margin-bottom:6px}
+  .input{width:100%;border:1px solid #d1d5db;border-radius:10px;padding:.5rem .75rem}
+  .input:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+  .radio-group{display:flex;gap:16px;align-items:center}
+  .radio{display:inline-flex;gap:6px;align-items:center}
+  .hint{display:block;color:#6b7280;margin-top:4px}
+  .actions{display:flex;gap:10px;justify-content:flex-end}
+  .btn{display:inline-flex;align-items:center;gap:.5rem;border-radius:12px;padding:.55rem 1rem;
+       text-decoration:none;border:1px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:#2563eb;color:#fff}
+  .btn-primary:hover{background:#1d4ed8}
+  .btn-ghost{background:#fff;border-color:#d1d5db;color:#374151}
+  .btn-ghost:hover{background:#f9fafb}
+  .btn-dark{background:#111827;color:#fff}
+  .btn-dark:hover{background:#0b1220}
+  .badge{display:inline-flex;align-items:center;gap:.5rem;background:#eff6ff;color:#1d4ed8;
+         border:1px solid #bfdbfe;border-radius:999px;padding:.35rem .75rem;font-size:.9rem}
+</style>
+
 {% endblock %}

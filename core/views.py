@@ -17,7 +17,7 @@ import openpyxl
 import io
 from io import BytesIO
 import xlsxwriter
-from django.utils.timezone import is_aware, localtime
+from django.utils.timezone import is_aware, localtime, timedelta
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.formatting.rule import ColorScaleRule
 from django.utils import timezone
@@ -1863,6 +1863,8 @@ def relatorio_consolidado_view(request):
     return render(request, 'core/relatorios/consolidado_diferenca.html', context)
 
 
+SHIFT_START_HOUR = 19  # início do "dia operacional": 19:00
+
 @login_required
 def relatorio_contagem_atual(request):
     bar_id = request.session.get('bar_id')
@@ -1871,50 +1873,72 @@ def relatorio_contagem_atual(request):
 
     bar_atual = Bar.objects.get(id=bar_id)
     restaurante = bar_atual.restaurante
-
     bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
+
+    # --------- Filtro de data ---------
+    filtro_data_str = (request.GET.get('data') or '').strip()   # formato: YYYY-MM-DD
+    modo = (request.GET.get('modo') or 'operacional').lower()   # 'operacional' | 'calendario'
+    use_range = False
+    inicio = fim = None
+
+    if filtro_data_str:
+        try:
+            dia = datetime.strptime(filtro_data_str, '%Y-%m-%d').date()
+            tz = timezone.get_current_timezone()
+
+            if modo == 'calendario':
+                # 00:00 -> 23:59 do dia escolhido
+                inicio = timezone.make_aware(datetime.combine(dia, time(0, 0, 0)), tz)
+                fim    = inicio + timedelta(days=1)
+            else:
+                # Dia operacional: 19:00 do dia escolhido -> 18:59 do dia seguinte
+                start_naive = datetime.combine(dia, time(SHIFT_START_HOUR, 0, 0))
+                inicio = timezone.make_aware(start_naive, tz)
+                fim    = inicio + timedelta(days=1)
+
+            use_range = True
+        except ValueError:
+            messages.warning(request, "Data inválida no filtro; exibindo contagem atual.")
+
     dados_por_bar = {}
-    somatorio_total = defaultdict(lambda: {
-        'garrafas': 0,
-        'doses': 0.0,
-        'produto': None
-    })
+    somatorio_total = defaultdict(lambda: {'garrafas': 0, 'doses': 0.0, 'produto': None})
 
     for bar in bares:
-        contagens = ContagemBar.objects.filter(
-            bar=bar
-        ).order_by('-data_contagem')
+        qs = ContagemBar.objects.filter(bar=bar).order_by('-data_contagem')
+        if use_range:
+            qs = qs.filter(data_contagem__gte=inicio, data_contagem__lt=fim)
 
-        ultima_contagem_por_produto = {}
-        for contagem in contagens:
-            if contagem.produto_id not in ultima_contagem_por_produto:
-                ultima_contagem_por_produto[contagem.produto_id] = contagem
+        # Pega a ÚLTIMA contagem de cada produto dentro do período (ou no geral, se sem filtro)
+        ultima_por_produto = {}
+        for c in qs:
+            if c.produto_id not in ultima_por_produto:
+                ultima_por_produto[c.produto_id] = c
 
-        contagens_finais = list(ultima_contagem_por_produto.values())
+        contagens_finais = list(ultima_por_produto.values())
         dados_por_bar[bar.nome] = contagens_finais
 
-        for contagem in contagens_finais:
-            pid = contagem.produto_id
-            somatorio_total[pid]['produto'] = contagem.produto
-            somatorio_total[pid]['garrafas'] += contagem.quantidade_garrafas_cheias or 0
-            somatorio_total[pid]['doses'] += float(contagem.quantidade_doses_restantes or 0)
+        for c in contagens_finais:
+            pid = c.produto_id
+            somatorio_total[pid]['produto'] = c.produto
+            somatorio_total[pid]['garrafas'] += c.quantidade_garrafas_cheias or 0
+            somatorio_total[pid]['doses']    += float(c.quantidade_doses_restantes or 0)
 
     context = {
         'dados_por_bar': dados_por_bar,
         'restaurante': restaurante,
-        'somatorio_total': dict(somatorio_total),  # 🔁 converter para dict padrão
+        'somatorio_total': dict(somatorio_total),
+        'filtro_data': filtro_data_str,
+        'modo': 'calendario' if modo == 'calendario' else 'operacional',
+        'use_range': use_range,
+        'inicio_periodo': inicio,
+        'fim_periodo': fim,
+        'SHIFT_START_HOUR': SHIFT_START_HOUR,
     }
-
     return render(request, 'core/relatorios/contagem_atual.html', context)
 
 
 
 DOSE_ML = Decimal('50')  # ml por dose
-
-from datetime import date  # se ainda não tiver
-from collections import defaultdict, OrderedDict  # OrderedDict já usado no final
-from django.utils.timezone import localtime       # usado ao montar 'data'
-# DOSE_ML deve existir no seu contexto (ex.: settings ou constante). Mantive como está.
 
 @login_required
 def relatorio_eventos(request):
