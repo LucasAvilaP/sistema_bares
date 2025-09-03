@@ -3136,98 +3136,146 @@ def exportar_contagem_atual_excel(request):
     if not bar_id:
         return HttpResponse("Nenhum bar selecionado.", status=400)
 
-    bar_atual = Bar.objects.get(id=bar_id)
+    bar_atual = Bar.objects.only('id', 'restaurante').get(id=bar_id)
     restaurante = bar_atual.restaurante
-    bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
+
+    # --------- Filtros vindos do form (iguais à view) ---------
+    filtro_data_str = (request.GET.get('data') or '').strip()   # YYYY-MM-DD
+    modo = (request.GET.get('modo') or 'operacional').lower()   # 'operacional' | 'calendario'
+
+    use_range = False
+    inicio = fim = None
+    tz = timezone.get_current_timezone()
+
+    if filtro_data_str:
+        try:
+            dia = datetime.strptime(filtro_data_str, '%Y-%m-%d').date()
+            if modo == 'calendario':
+                inicio = timezone.make_aware(datetime.combine(dia, time(0, 0, 0)), tz)
+                fim    = inicio + timedelta(days=1)
+            else:
+                start_naive = datetime.combine(dia, time(SHIFT_START_HOUR, 0, 0))
+                inicio = timezone.make_aware(start_naive, tz)
+                fim    = inicio + timedelta(days=1)
+            use_range = True
+        except ValueError:
+            # se a data vier inválida, segue como "sem filtro"
+            pass
+
+    # --------- Montagem dos dados (mesmo critério da tela) ---------
+    bares = Bar.objects.filter(restaurante=restaurante).only('id', 'nome').order_by('nome')
 
     dados_por_bar = {}
     somatorio_total = defaultdict(lambda: {'garrafas': 0, 'doses': 0.0, 'produto': None})
 
     for bar in bares:
-        contagens = ContagemBar.objects.filter(bar=bar).order_by('-data_contagem')
-        ultima_contagem_por_produto = {}
+        qs = ContagemBar.objects.filter(bar=bar).order_by('-data_contagem', '-id')
+        if use_range:
+            qs = qs.filter(data_contagem__gte=inicio, data_contagem__lt=fim)
 
-        for contagem in contagens:
+        ultima_contagem_por_produto = {}
+        for contagem in qs:
             if contagem.produto_id not in ultima_contagem_por_produto:
                 ultima_contagem_por_produto[contagem.produto_id] = contagem
 
         contagens_finais = list(ultima_contagem_por_produto.values())
         dados_por_bar[bar.nome] = contagens_finais
 
-        for contagem in contagens_finais:
-            pid = contagem.produto_id
-            somatorio_total[pid]['produto'] = contagem.produto
-            somatorio_total[pid]['garrafas'] += contagem.quantidade_garrafas_cheias or 0
-            somatorio_total[pid]['doses'] += float(contagem.quantidade_doses_restantes or 0)
+        for c in contagens_finais:
+            pid = c.produto_id
+            somatorio_total[pid]['produto'] = c.produto
+            somatorio_total[pid]['garrafas'] += c.quantidade_garrafas_cheias or 0
+            somatorio_total[pid]['doses']    += float(c.quantidade_doses_restantes or 0)
 
-    # Criar arquivo Excel
+    # --------- Excel ---------
     output = io.BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
-    worksheet = workbook.add_worksheet('Contagem Atual')
+    ws = workbook.add_worksheet('Contagem Atual')
 
-    # Estilos
-    bold = workbook.add_format({'bold': True})
-    date_format = workbook.add_format({'num_format': 'dd/mm/yyyy hh:mm'})
-    number_format = workbook.add_format({'num_format': '#,##0.00'})
+    # Formatos
+    f_title = workbook.add_format({'bold': True, 'font_size': 14})
+    f_sub   = workbook.add_format({'italic': True, 'font_color': '#555555'})
+    f_bold  = workbook.add_format({'bold': True})
+    f_head  = workbook.add_format({'bold': True, 'bg_color': '#E8F5E9', 'border': 1})
+    f_head2 = workbook.add_format({'bold': True, 'bg_color': '#F3F4F6', 'border': 1})
+    f_cell  = workbook.add_format({'border': 1})
+    f_num   = workbook.add_format({'border': 1, 'num_format': '#,##0.00'})
+    f_dt    = workbook.add_format({'border': 1, 'num_format': 'dd/mm/yyyy hh:mm'})
+
+    # Larguras padrão
+    ws.set_column(0, 0, 34)  # Produto
+    ws.set_column(1, 1, 18)  # Garrafas
+    ws.set_column(2, 2, 18)  # Doses
+    ws.set_column(3, 3, 20)  # Doses ML
+    ws.set_column(4, 4, 22)  # Data
+    ws.set_column(5, 5, 18)  # Usuário
 
     row = 0
 
-    # ✅ Título da seção de totais
-    worksheet.write(row, 0, "Total por Produto no Restaurante", bold)
+    # Título e período
+    ws.write(row, 0, f"Relatório de Contagem — {restaurante.nome}", f_title); row += 1
+    if use_range:
+        label_modo = "Dia Operacional" if modo != 'calendario' else "Calendário"
+        periodo_txt = f"{label_modo}: {timezone.localtime(inicio).strftime('%d/%m/%Y %H:%M')} → {timezone.localtime(fim).strftime('%d/%m/%Y %H:%M')}"
+        ws.write(row, 0, periodo_txt, f_sub); row += 1
     row += 1
 
-    # ✅ Cabeçalhos
-    headers = ["Produto", "Total de Garrafas", "Total de Doses", "Total de Doses (ML)"]
-    for col, header in enumerate(headers):
-        worksheet.write(row, col, header, bold)
+    # ===== Totais do restaurante =====
+    ws.write(row, 0, "Total por Produto no Restaurante", f_bold); row += 1
+    headers_total = ["Produto", "Total de Garrafas", "Total de Doses", "Total de Doses (ML)"]
+    for col, h in enumerate(headers_total):
+        ws.write(row, col, h, f_head)
     row += 1
 
-    # ✅ Dados
     for item in somatorio_total.values():
-        worksheet.write(row, 0, item['produto'].nome)
-        worksheet.write(row, 1, item['garrafas'])
-        worksheet.write(row, 2, item['doses'], number_format)
-        worksheet.write(row, 3, item['doses'] * 50, number_format)
+        ws.write(row, 0, item['produto'].nome, f_cell)
+        ws.write(row, 1, item['garrafas'], f_cell)
+        ws.write(row, 2, item['doses'], f_num)
+        ws.write(row, 3, item['doses'] * 50, f_num)
         row += 1
 
-    row += 2  # espaço antes da próxima seção
+    row += 2  # espaço
 
-    # ✅ Dados por bar
+    # ===== Por bar =====
     for bar_nome, contagens in dados_por_bar.items():
-        worksheet.write(row, 0, f"Bar: {bar_nome}", bold)
-        row += 1
+        ws.write(row, 0, f"Bar: {bar_nome}", f_bold); row += 1
 
         headers = ["Produto", "Garrafas", "Doses", "Doses (ML)", "Data da Contagem", "Usuário"]
-        for col, header in enumerate(headers):
-            worksheet.write(row, col, header, bold)
+        for col, h in enumerate(headers):
+            ws.write(row, col, h, f_head2)
         row += 1
 
-        for contagem in contagens:
-            doses = float(contagem.quantidade_doses_restantes or 0)
-            worksheet.write(row, 0, contagem.produto.nome)
-            worksheet.write(row, 1, contagem.quantidade_garrafas_cheias)
-            worksheet.write(row, 2, doses, number_format)
-            worksheet.write(row, 3, doses * 50, number_format)
+        for c in contagens:
+            doses = float(c.quantidade_doses_restantes or 0)
+            ws.write(row, 0, c.produto.nome, f_cell)
+            ws.write(row, 1, c.quantidade_garrafas_cheias, f_cell)
+            ws.write(row, 2, doses, f_num)
+            ws.write(row, 3, doses * 50, f_num)
 
-            data_contagem = contagem.data_contagem
-            if is_aware(data_contagem):
-                data_contagem = data_contagem.replace(tzinfo=None)
+            # Data local (sem tz) para o Excel
+            dt_local = timezone.localtime(c.data_contagem)
+            ws.write_datetime(row, 4, dt_local.replace(tzinfo=None), f_dt)
 
-            worksheet.write(row, 4, data_contagem, date_format)
-            worksheet.write(row, 5, contagem.usuario.username)
+            username = getattr(c.usuario, 'username', '-')
+            ws.write(row, 5, username, f_cell)
             row += 1
 
         row += 2  # espaço entre bares
 
-    # Finalizar e enviar
     workbook.close()
     output.seek(0)
 
-    filename = f"relatorio_contagem_atual_{restaurante.nome.replace(' ', '_')}.xlsx"
-    response = HttpResponse(output.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = f'attachment; filename={filename}'
+    sufixo = "atual"
+    if use_range:
+        sufixo = f"{('oper' if modo != 'calendario' else 'cal')}_{inicio.strftime('%Y%m%d')}"
+    filename = f"relatorio_contagem_{sufixo}_{restaurante.nome.replace(' ', '_')}.xlsx"
 
-    return response
+    resp = HttpResponse(
+        output.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    resp['Content-Disposition'] = f'attachment; filename={filename}'
+    return resp
 
 
 
