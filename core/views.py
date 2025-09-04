@@ -3326,12 +3326,13 @@ def exportar_diferenca_contagens_excel(request):
     restaurante = bar_atual.restaurante
     bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
 
-    # ===== Reaproveita a lógica do relatório para montar os dados =====
+    # ===== Montagem dos dados (2 últimas por produto/bar) =====
     dados_por_bar = {}
+    # Agora vamos acumular também penúltima e última para o CONSOLIDADO
     somatorio_total = defaultdict(lambda: {
         'produto': None,
-        'diff_garrafas': Decimal('0'),
-        'diff_doses': Decimal('0'),
+        'p_g': Decimal('0'), 'u_g': Decimal('0'),
+        'p_d': Decimal('0'), 'u_d': Decimal('0'),
     })
 
     for bar in bares:
@@ -3346,9 +3347,9 @@ def exportar_diferenca_contagens_excel(request):
         for c in contagens:
             pid = c.produto_id
             if pid not in duas_ultimas_por_produto:
-                duas_ultimas_por_produto[pid] = [c]
+                duas_ultimas_por_produto[pid] = [c]            # última
             elif len(duas_ultimas_por_produto[pid]) == 1:
-                duas_ultimas_por_produto[pid].append(c)
+                duas_ultimas_por_produto[pid].append(c)        # penúltima
 
         linhas_bar = []
         for pid, lista in duas_ultimas_por_produto.items():
@@ -3358,21 +3359,20 @@ def exportar_diferenca_contagens_excel(request):
             u_g = Decimal(ultimo.quantidade_garrafas_cheias or 0)
             u_d = Decimal(ultimo.quantidade_doses_restantes or 0)
 
-            if penultimo:
-                p_g = Decimal(penultimo.quantidade_garrafas_cheias or 0)
-                p_d = Decimal(penultimo.quantidade_doses_restantes or 0)
-                diff_g = u_g - p_g
-                diff_d = u_d - p_d
-            else:
-                p_g = None
-                p_d = None
-                diff_g = None
-                diff_d = None
+            p_g = Decimal(penultimo.quantidade_garrafas_cheias or 0) if penultimo else None
+            p_d = Decimal(penultimo.quantidade_doses_restantes or 0) if penultimo else None
 
-            if diff_g is not None and diff_d is not None:
-                somatorio_total[pid]['produto'] = ultimo.produto
-                somatorio_total[pid]['diff_garrafas'] += diff_g
-                somatorio_total[pid]['diff_doses'] += diff_d
+            # Diferenças por linha (se houver penúltima)
+            diff_g = (u_g - p_g) if p_g is not None else None
+            diff_d = (u_d - p_d) if p_d is not None else None
+
+            # Consolidado: somamos penúltima/última (tratando None como 0)
+            st = somatorio_total[pid]
+            st['produto'] = ultimo.produto
+            st['u_g'] += u_g
+            st['u_d'] += u_d
+            st['p_g'] += (p_g if p_g is not None else Decimal('0'))
+            st['p_d'] += (p_d if p_d is not None else Decimal('0'))
 
             linhas_bar.append({
                 'bar': bar.nome,
@@ -3381,147 +3381,169 @@ def exportar_diferenca_contagens_excel(request):
                 'p_g': p_g, 'p_d': p_d,
                 'diff_g': diff_g, 'diff_d': diff_d,
                 'data_p': (penultimo.data_contagem if penultimo else None),
-                'user_p': (penultimo.usuario.username if penultimo else None),
+                'user_p': (penultimo.usuario.username if (penultimo and penultimo.usuario) else None),
                 'data_u': ultimo.data_contagem,
-                'user_u': ultimo.usuario.username,
+                'user_u': (ultimo.usuario.username if ultimo.usuario else None),
             })
 
         linhas_bar.sort(key=lambda x: x['produto'].nome.lower())
         dados_por_bar[bar.nome] = linhas_bar
 
+    # Para o consolidado, a diferença é (Última - Penúltima) agregadas
     somatorio_total = dict(sorted(
         somatorio_total.items(),
         key=lambda kv: kv[1]['produto'].nome.lower() if kv[1]['produto'] else ''
     ))
 
-    # ===== Monta o Excel =====
+    # ===== Excel =====
     wb = Workbook()
 
-    # Metadados / primeira sheet: Consolidado
+    # -------- Sheet 1: CONSOLIDADO --------
     ws1 = wb.active
     ws1.title = "Consolidado"
 
-    # Título e info
-    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
-    titulo = ws1.cell(row=1, column=1, value=f"Diferenças (Última − Penúltima) — {restaurante.nome}")
+    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    titulo = ws1.cell(row=1, column=1, value=f"Diferenças (Penúltima x Última) — {restaurante.nome}")
     titulo.font = Font(bold=True, size=14)
     titulo.alignment = Alignment(horizontal="left", vertical="center")
 
     now = timezone.localtime(timezone.now())
-    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
     info = ws1.cell(row=2, column=1, value=f"Gerado em {now.strftime('%d/%m/%Y %H:%M')}")
     info.font = Font(italic=True, size=11)
 
-    # Cabeçalho
-    headers1 = ["Produto", "Garrafas", "Doses", "Doses (ML)"]
     ws1.append([])
+
+    headers1 = [
+        "Produto",
+        "Penúltima (Garrafas)", "Última (Garrafas)", "Diferença (Garrafas)",
+        "Penúltima (Doses)",   "Última (Doses)",    "Diferença (Doses)",
+        "Diferença (Doses ML)"
+    ]
     ws1.append(headers1)
     _apply_header_style(ws1[4])
 
-    # Linhas do consolidado
     first_data_row = 5
     r = first_data_row
+
     for item in somatorio_total.values():
         prod = item['produto'].nome if item['produto'] else ""
-        diff_g = item['diff_garrafas']
-        diff_d = item['diff_doses']
-        diff_ml = (diff_d * DOSE_ML) if diff_d is not None else None
+
+        p_g = item['p_g']; u_g = item['u_g']; diff_g = (u_g - p_g)
+        p_d = item['p_d']; u_d = item['u_d']; diff_d = (u_d - p_d)
+        diff_ml = diff_d * DOSE_ML
 
         ws1.cell(row=r, column=1, value=prod)
-        c2 = ws1.cell(row=r, column=2, value=float(diff_g) if diff_g is not None else None)
-        c3 = ws1.cell(row=r, column=3, value=float(diff_d) if diff_d is not None else None)
-        c4 = ws1.cell(row=r, column=4, value=float(diff_ml) if diff_ml is not None else None)
 
-        c2.number_format = "0"
-        c3.number_format = "0.00"
-        c4.number_format = "0.00"
+        c2 = ws1.cell(row=r, column=2, value=float(p_g))
+        c3 = ws1.cell(row=r, column=3, value=float(u_g))
+        c4 = ws1.cell(row=r, column=4, value=float(diff_g))
+
+        c5 = ws1.cell(row=r, column=5, value=float(p_d))
+        c6 = ws1.cell(row=r, column=6, value=float(u_d))
+        c7 = ws1.cell(row=r, column=7, value=float(diff_d))
+        c8 = ws1.cell(row=r, column=8, value=float(diff_ml))
+
+        # formatos
+        c2.number_format = "0"; c3.number_format = "0"; c4.number_format = "0"
+        c5.number_format = "0.00"; c6.number_format = "0.00"; c7.number_format = "0.00"; c8.number_format = "0.00"
         r += 1
 
     if r > first_data_row:
-        _apply_body_borders(ws1, first_data_row, r - 1, 1, 4)
+        _apply_body_borders(ws1, first_data_row, r - 1, 1, 8)
         ws1.freeze_panes = "A5"
 
-        # Escala de cores (vermelho → branco → verde) nas diferenças
-        for col in [2, 3, 4]:
+        # Escala de cores nas diferenças (Garrafas: col 4, Doses: col 7, Doses ML: col 8)
+        for col in [4, 7, 8]:
             col_letter = get_column_letter(col)
             ws1.conditional_formatting.add(
                 f"{col_letter}{first_data_row}:{col_letter}{r-1}",
-                ColorScaleRule(start_type='num', start_value=-1, start_color='FCA5A5',  # red-300
-                               mid_type='num', mid_value=0, mid_color='FFFFFF',
-                               end_type='num', end_value=1, end_color='86EFAC')   # green-300
+                ColorScaleRule(
+                    start_type='num', start_value=-1, start_color='FCA5A5',  # vermelho
+                    mid_type='num',   mid_value=0,   mid_color='FFFFFF',
+                    end_type='num',   end_value=1,   end_color='86EFAC'     # verde
+                )
             )
 
-    _auto_fit_columns(ws1)
+    # larguras
+    ws1.column_dimensions['A'].width = 36
+    for col in ['B','C','D','E','F','G','H']:
+        ws1.column_dimensions[col].width = 20
 
-    # Segunda sheet: Detalhado por bar
+    _auto_fit_columns(ws1)  # se preferir confiar no auto-fit que você já usa
+
+    # -------- Sheet 2: DETALHADO --------
     ws2 = wb.create_sheet(title="Detalhado")
-    ws2.append([f"Diferenças por Produto (Penúltima → Última) — {restaurante.nome}"])
-    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
-    ws2.cell(row=1, column=1).font = Font(bold=True, size=14)
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
+    ws2.cell(row=1, column=1, value=f"Diferenças por Produto (Penúltima → Última) — {restaurante.nome}") \
+        .font = Font(bold=True, size=14)
 
-    ws2.append([f"Gerado em {now.strftime('%d/%m/%Y %H:%M')}"])
-    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=12)
-    ws2.cell(row=2, column=1).font = Font(italic=True, size=11)
+    ws2.merge_cells(start_row=2, start_column=1, end_row=2, end_column=13)
+    ws2.cell(row=2, column=1, value=f"Gerado em {now.strftime('%d/%m/%Y %H:%M')}") \
+        .font = Font(italic=True, size=11)
 
+    ws2.append([])
     headers2 = [
         "Bar", "Produto",
         "Penúltima (Garrafas)", "Penúltima (Doses)",
-        "Última (Garrafas)", "Última (Doses)",
+        "Última (Garrafas)",    "Última (Doses)",
         "Diferença (Garrafas)", "Diferença (Doses)", "Diferença (Doses ML)",
         "Data Penúltima", "Usuário Penúltima",
-        "Data Última", "Usuário Última",
+        "Data Última",    "Usuário Última",
     ]
-    ws2.append([])
     ws2.append(headers2)
     _apply_header_style(ws2[4])
 
     first_data_row2 = 5
     r2 = first_data_row2
     for bar_nome, linhas in dados_por_bar.items():
-        for linha in linhas:
-            diff_ml = (linha['diff_d'] * DOSE_ML) if linha['diff_d'] is not None else None
-            ws2.cell(row=r2, column=1, value=bar_nome)
-            ws2.cell(row=r2, column=2, value=linha['produto'].nome)
+        for L in linhas:
+            diff_ml = (L['diff_d'] * DOSE_ML) if L['diff_d'] is not None else None
 
-            c_pg = ws2.cell(row=r2, column=3, value=float(linha['p_g']) if linha['p_g'] is not None else None)
-            c_pd = ws2.cell(row=r2, column=4, value=float(linha['p_d']) if linha['p_d'] is not None else None)
-            c_ug = ws2.cell(row=r2, column=5, value=float(linha['u_g']))
-            c_ud = ws2.cell(row=r2, column=6, value=float(linha['u_d']))
-            c_dg = ws2.cell(row=r2, column=7, value=float(linha['diff_g']) if linha['diff_g'] is not None else None)
-            c_dd = ws2.cell(row=r2, column=8, value=float(linha['diff_d']) if linha['diff_d'] is not None else None)
+            ws2.cell(row=r2, column=1, value=bar_nome)
+            ws2.cell(row=r2, column=2, value=L['produto'].nome)
+
+            c_pg = ws2.cell(row=r2, column=3, value=float(L['p_g']) if L['p_g'] is not None else None)
+            c_pd = ws2.cell(row=r2, column=4, value=float(L['p_d']) if L['p_d'] is not None else None)
+            c_ug = ws2.cell(row=r2, column=5, value=float(L['u_g']))
+            c_ud = ws2.cell(row=r2, column=6, value=float(L['u_d']))
+            c_dg = ws2.cell(row=r2, column=7, value=float(L['diff_g']) if L['diff_g'] is not None else None)
+            c_dd = ws2.cell(row=r2, column=8, value=float(L['diff_d']) if L['diff_d'] is not None else None)
             c_ml = ws2.cell(row=r2, column=9, value=float(diff_ml) if diff_ml is not None else None)
 
             for c in (c_pg, c_ug, c_dg):
-                if c is not None:
-                    c.number_format = "0"
+                if c is not None: c.number_format = "0"
             for c in (c_pd, c_ud, c_dd, c_ml):
-                if c is not None:
-                    c.number_format = "0.00"
+                if c is not None: c.number_format = "0.00"
 
-            ws2.cell(row=r2, column=10, value=linha['data_p'].strftime('%d/%m/%Y %H:%M') if linha['data_p'] else None)
-            ws2.cell(row=r2, column=11, value=linha['user_p'] if linha['user_p'] else None)
-            ws2.cell(row=r2, column=12, value=linha['data_u'].strftime('%d/%m/%Y %H:%M'))
-            ws2.cell(row=r2, column=13, value=linha['user_u'])
+            ws2.cell(row=r2, column=10, value=L['data_p'].strftime('%d/%m/%Y %H:%M') if L['data_p'] else None)
+            ws2.cell(row=r2, column=11, value=L['user_p'] or None)
+            ws2.cell(row=r2, column=12, value=L['data_u'].strftime('%d/%m/%Y %H:%M'))
+            ws2.cell(row=r2, column=13, value=L['user_u'] or None)
 
             r2 += 1
 
     if r2 > first_data_row2:
         _apply_body_borders(ws2, first_data_row2, r2 - 1, 1, 13)
         ws2.freeze_panes = "A5"
-
-        # Escala de cores para as 3 colunas de diferença (garrafas, doses, ml)
         for col in [7, 8, 9]:
             col_letter = get_column_letter(col)
             ws2.conditional_formatting.add(
                 f"{col_letter}{first_data_row2}:{col_letter}{r2-1}",
-                ColorScaleRule(start_type='num', start_value=-1, start_color='FCA5A5',
-                               mid_type='num', mid_value=0, mid_color='FFFFFF',
-                               end_type='num', end_value=1, end_color='86EFAC')
+                ColorScaleRule(
+                    start_type='num', start_value=-1, start_color='FCA5A5',
+                    mid_type='num',   mid_value=0,   mid_color='FFFFFF',
+                    end_type='num',   end_value=1,   end_color='86EFAC'
+                )
             )
 
+    # Larguras simpáticas
+    widths2 = [16, 32, 20, 18, 18, 18, 22, 20, 22, 20, 22, 20, 22]
+    for i, w in enumerate(widths2, start=1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
     _auto_fit_columns(ws2)
 
-    # ===== Resposta HTTP =====
+    # ===== Resposta =====
     from django.utils.text import slugify
     filename = f"dif-contagens-{slugify(restaurante.nome)}-{now.strftime('%Y%m%d-%H%M')}.xlsx"
     response = HttpResponse(
