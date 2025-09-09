@@ -215,6 +215,138 @@ def requisicao_produtos_view(request):
     return render(request, 'core/requisicao.html', {'produtos': produtos})
 
 
+@login_required
+def aprovar_requisicoes_view(request):
+    # 🔒 Permissão
+    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='aprovacao').exists():
+        messages.error(request, "Você não tem permissão para acessar a página de Aprovar/Rejeitar.")
+        return redirect('dashboard')
+
+    restaurante_id = request.session.get('restaurante_id')
+    requisicoes = RequisicaoProduto.objects.filter(restaurante_id=restaurante_id, status='PENDENTE')
+    restaurante = get_object_or_404(Restaurante, id=restaurante_id)
+    bar_central = get_object_or_404(Bar, restaurante=restaurante, is_estoque_central=True)
+
+    if request.method == 'POST':
+        erros = []
+        for key in request.POST:
+            if not key.startswith('aprovacao_'):
+                continue
+
+            req_id = key.split('_')[1]
+            decisao = request.POST.get(key)
+            requisicao = get_object_or_404(
+                RequisicaoProduto, id=req_id, restaurante_id=restaurante_id, status='PENDENTE'
+            )
+
+            if decisao == 'aprovar':
+                qtd = Decimal(requisicao.quantidade_solicitada)
+                sucesso = EstoqueBar.retirar(bar_central, requisicao.produto, qtd)
+
+                if sucesso:
+                    # ➕ Apenas movimenta os estoques (sem criar TransferenciaBar)
+                    EstoqueBar.adicionar(requisicao.bar, requisicao.produto, qtd)
+
+                    requisicao.status = 'APROVADA'
+                    messages.success(request, "Requisição aprovada com sucesso.")
+                else:
+                    requisicao.status = 'FALHA_ESTOQUE'
+                    requisicao.motivo_negativa = "Produto insuficiente no estoque central."
+                    messages.warning(
+                        request,
+                        f"Produto '{requisicao.produto.nome}' insuficiente no estoque central. Requisição {req_id} não aprovada."
+                    )
+
+                requisicao.usuario_aprovador = request.user
+                requisicao.data_decisao = timezone.now()
+                requisicao.save()
+
+            elif decisao == 'negar':
+                motivo = (request.POST.get(f'motivo_{req_id}', '') or '').strip()
+                if not motivo:
+                    erros.append(f"Informe o motivo da negativa para a requisição {req_id}.")
+                    continue
+
+                requisicao.status = 'NEGADA'
+                requisicao.motivo_negativa = motivo
+                requisicao.usuario_aprovador = request.user
+                requisicao.data_decisao = timezone.now()
+                requisicao.save()
+                messages.info(request, f"Requisição {req_id} negada.")
+
+        if erros:
+            for e in erros:
+                messages.error(request, e)
+        return redirect('aprovar-requisicoes')
+
+    return render(request, 'core/aprovar_requisicoes.html', {'requisicoes': requisicoes})
+
+
+
+
+
+
+
+def atualizar_estoque(bar, produto, quantidade_delta):
+    estoque, _ = EstoqueBar.objects.get_or_create(bar=bar, produto=produto)
+    estoque.quantidade += quantidade_delta
+    estoque.save()
+
+
+
+@login_required
+def historico_requisicoes_view(request):
+    # 🔒 Permissão
+    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='historico_requi').exists():
+        messages.error(request, "Você não tem permissão para acessar a página de Historico de requisições.")
+        return redirect('dashboard')
+
+    bar_id = request.session.get('bar_id')
+    restaurante_id = request.session.get('restaurante_id')
+
+    filtro_ativo = False
+    agrupado = defaultdict(list)
+
+    if not bar_id or not restaurante_id:
+        return render(request, 'core/historico_requisicoes.html', {
+            'agrupado': agrupado,
+            'now': datetime.now(),
+            'filtro_ativo': filtro_ativo
+        })
+
+    mes = request.GET.get('mes')
+    ano = request.GET.get('ano')
+
+    # ⚡ mais performático para render (tudo que exibimos é FK direta)
+    qs = (RequisicaoProduto.objects
+          .filter(restaurante_id=restaurante_id, bar_id=bar_id)
+          .select_related('produto', 'bar', 'usuario', 'usuario_aprovador'))
+
+    if mes and ano:
+        try:
+            mes_i = int(mes)
+            ano_i = int(ano)
+            qs = qs.filter(data_solicitacao__month=mes_i, data_solicitacao__year=ano_i)
+            filtro_ativo = True
+        except ValueError:
+            pass
+        qs = qs.order_by('-data_solicitacao')
+    else:
+        # Últimas 20 (sem filtro)
+        qs = qs.order_by('-data_solicitacao')[:20]
+
+    # Agrupa por data (dia)
+    qs = qs.annotate(data_truncada=TruncDate('data_solicitacao'))
+    for r in qs:
+        agrupado[r.data_truncada].append(r)
+
+    return render(request, 'core/historico_requisicoes.html', {
+        'agrupado': dict(agrupado),
+        'now': datetime.now(),
+        'filtro_ativo': filtro_ativo
+    })
+
+
 
 
 @login_required
@@ -496,152 +628,6 @@ def historico_contagens_view(request):
         'now': now(),
         'meses': list(range(1, 13))  # de 1 a 12
     })
-
-
-
-
-
-@login_required
-def aprovar_requisicoes_view(request):
-    # 🔒 Permissão
-    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='aprovacao').exists():
-        messages.error(request, "Você não tem permissão para acessar a página de Aprovar/Rejeitar.")
-        return redirect('dashboard')
-
-    restaurante_id = request.session.get('restaurante_id')
-    requisicoes = RequisicaoProduto.objects.filter(restaurante_id=restaurante_id, status='PENDENTE')
-    restaurante = get_object_or_404(Restaurante, id=restaurante_id)
-    bar_central = get_object_or_404(Bar, restaurante=restaurante, is_estoque_central=True)
-
-    if request.method == 'POST':
-        erros = []
-        # percorre apenas as linhas que receberam decisão
-        for key in request.POST:
-            if not key.startswith('aprovacao_'):
-                continue
-
-            req_id = key.split('_')[1]
-            decisao = request.POST.get(key)
-            requisicao = get_object_or_404(
-                RequisicaoProduto, id=req_id, restaurante_id=restaurante_id, status='PENDENTE'
-            )
-
-            if decisao == 'aprovar':
-                qtd = Decimal(requisicao.quantidade_solicitada)
-                sucesso = EstoqueBar.retirar(bar_central, requisicao.produto, qtd)
-
-                if sucesso:
-                    EstoqueBar.adicionar(requisicao.bar, requisicao.produto, qtd)
-
-                    TransferenciaBar.objects.create(
-                        restaurante=requisicao.restaurante,
-                        origem=bar_central,
-                        destino=requisicao.bar,
-                        produto=requisicao.produto,
-                        quantidade=qtd,
-                        usuario=request.user
-                    )
-
-                    requisicao.status = 'APROVADA'
-                    messages.success(request, "Requisição aprovada com sucesso.")
-                else:
-                    requisicao.status = 'FALHA_ESTOQUE'
-                    requisicao.motivo_negativa = "Produto insuficiente no estoque central."
-                    messages.warning(
-                        request,
-                        f"Produto '{requisicao.produto.nome}' insuficiente no estoque central. Requisição {req_id} não aprovada."
-                    )
-
-                requisicao.usuario_aprovador = request.user
-                requisicao.data_decisao = timezone.now()
-                requisicao.save()
-
-            elif decisao == 'negar':
-                motivo = (request.POST.get(f'motivo_{req_id}', '') or '').strip()
-                if not motivo:
-                    erros.append(f"Informe o motivo da negativa para a requisição {req_id}.")
-                    # não salva/avança essa requisição — continua PENDENTE
-                    continue
-
-                requisicao.status = 'NEGADA'
-                requisicao.motivo_negativa = motivo
-                requisicao.usuario_aprovador = request.user
-                requisicao.data_decisao = timezone.now()
-                requisicao.save()
-                messages.info(request, f"Requisição {req_id} negada.")
-
-        if erros:
-            for e in erros:
-                messages.error(request, e)
-        return redirect('aprovar-requisicoes')
-
-    return render(request, 'core/aprovar_requisicoes.html', {'requisicoes': requisicoes})
-
-
-
-
-
-
-def atualizar_estoque(bar, produto, quantidade_delta):
-    estoque, _ = EstoqueBar.objects.get_or_create(bar=bar, produto=produto)
-    estoque.quantidade += quantidade_delta
-    estoque.save()
-
-
-
-@login_required
-def historico_requisicoes_view(request):
-    # 🔒 Permissão
-    if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='historico_requi').exists():
-        messages.error(request, "Você não tem permissão para acessar a página de Historico de requisições.")
-        return redirect('dashboard')
-
-    bar_id = request.session.get('bar_id')
-    restaurante_id = request.session.get('restaurante_id')
-
-    filtro_ativo = False
-    agrupado = defaultdict(list)
-
-    if not bar_id or not restaurante_id:
-        return render(request, 'core/historico_requisicoes.html', {
-            'agrupado': agrupado,
-            'now': datetime.now(),
-            'filtro_ativo': filtro_ativo
-        })
-
-    mes = request.GET.get('mes')
-    ano = request.GET.get('ano')
-
-    # ⚡ mais performático para render (tudo que exibimos é FK direta)
-    qs = (RequisicaoProduto.objects
-          .filter(restaurante_id=restaurante_id, bar_id=bar_id)
-          .select_related('produto', 'bar', 'usuario', 'usuario_aprovador'))
-
-    if mes and ano:
-        try:
-            mes_i = int(mes)
-            ano_i = int(ano)
-            qs = qs.filter(data_solicitacao__month=mes_i, data_solicitacao__year=ano_i)
-            filtro_ativo = True
-        except ValueError:
-            pass
-        qs = qs.order_by('-data_solicitacao')
-    else:
-        # Últimas 20 (sem filtro)
-        qs = qs.order_by('-data_solicitacao')[:20]
-
-    # Agrupa por data (dia)
-    qs = qs.annotate(data_truncada=TruncDate('data_solicitacao'))
-    for r in qs:
-        agrupado[r.data_truncada].append(r)
-
-    return render(request, 'core/historico_requisicoes.html', {
-        'agrupado': dict(agrupado),
-        'now': datetime.now(),
-        'filtro_ativo': filtro_ativo
-    })
-
-
 
 
 
@@ -3081,7 +3067,7 @@ def relatorio_consolidado_excel_view(request):
 
         dados_agrupados[data_str][produto]['quantidade_requisitada'] = \
             dados_agrupados[data_str][produto].get('quantidade_requisitada', 0) + float(req.quantidade_solicitada)
-
+        
         contagem = ContagemBar.objects.filter(
             bar_id=bar_id,
             produto=produto,
