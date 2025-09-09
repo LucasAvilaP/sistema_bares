@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.contrib.auth.models import User
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import F, Q
 
 
 
@@ -144,49 +145,114 @@ class EstoqueBar(models.Model):
     bar = models.ForeignKey('Bar', on_delete=models.CASCADE)
     produto = models.ForeignKey('Produto', on_delete=models.CASCADE)
     quantidade_garrafas = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    quantidade_doses = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    quantidade_doses    = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
-        # substitui unique_together
         constraints = [
-            models.UniqueConstraint(fields=['bar', 'produto'], name='uniq_estoque_bar_produto')
+            models.UniqueConstraint(fields=['bar', 'produto'], name='uniq_estoque_bar_produto'),
+            # evita ficar negativo em qualquer via
+            models.CheckConstraint(
+                check=Q(quantidade_garrafas__gte=0) & Q(quantidade_doses__gte=0),
+                name='chk_estoque_nao_negativo'
+            ),
         ]
-        indexes = [
-            models.Index(fields=['bar', 'produto']),
-        ]
+        indexes = [models.Index(fields=['bar', 'produto'])]
         ordering = ['bar__nome', 'produto__nome']
-        
-        
 
     def __str__(self):
         return f"{self.bar.nome} - {self.produto.nome}: {self.quantidade_garrafas} garrafas | {self.quantidade_doses} doses"
 
     @classmethod
     @transaction.atomic
-    def retirar(cls, bar, produto, garrafas: Decimal, doses: Decimal = Decimal(0)) -> bool:
-        estoque, _ = cls.objects.get_or_create(
-            bar=bar,
-            produto=produto,
-            defaults={'quantidade_garrafas': 0, 'quantidade_doses': 0}
-        )
-        if estoque.quantidade_garrafas >= garrafas and estoque.quantidade_doses >= doses:
-            estoque.quantidade_garrafas -= garrafas
-            estoque.quantidade_doses -= doses
-            estoque.save()
-            return True
-        return False
+    def retirar(cls, bar, produto, garrafas: Decimal = Decimal('0'), doses: Decimal = Decimal('0')) -> bool:
+        """Debita SOMENTE os campos com quantidade > 0.
+           Usa lock de linha + F() para evitar race/lost update."""
+        garrafas = Decimal(garrafas or 0)
+        doses    = Decimal(doses or 0)
+
+        est, _ = (cls.objects
+                  .select_for_update()
+                  .get_or_create(bar=bar, produto=produto,
+                                 defaults={'quantidade_garrafas': Decimal('0'),
+                                           'quantidade_doses': Decimal('0')}))
+
+        # validações por campo (independentes)
+        if garrafas > 0 and est.quantidade_garrafas < garrafas:
+            return False
+        if doses > 0 and est.quantidade_doses < doses:
+            return False
+
+        # atualizações atômicas
+        if garrafas > 0:
+            cls.objects.filter(pk=est.pk).update(
+                quantidade_garrafas=F('quantidade_garrafas') - garrafas
+            )
+        if doses > 0:
+            cls.objects.filter(pk=est.pk).update(
+                quantidade_doses=F('quantidade_doses') - doses
+            )
+        return True
 
     @classmethod
     @transaction.atomic
-    def adicionar(cls, bar, produto, garrafas: Decimal, doses: Decimal = Decimal(0)):
-        estoque, _ = cls.objects.get_or_create(
-            bar=bar,
-            produto=produto,
-            defaults={'quantidade_garrafas': 0, 'quantidade_doses': 0}
-        )
-        estoque.quantidade_garrafas += garrafas
-        estoque.quantidade_doses += doses
-        estoque.save()
+    def adicionar(cls, bar, produto, garrafas: Decimal = Decimal('0'), doses: Decimal = Decimal('0')) -> None:
+        garrafas = Decimal(garrafas or 0)
+        doses    = Decimal(doses or 0)
+
+        est, _ = (cls.objects
+                  .select_for_update()
+                  .get_or_create(bar=bar, produto=produto,
+                                 defaults={'quantidade_garrafas': Decimal('0'),
+                                           'quantidade_doses': Decimal('0')}))
+        if garrafas > 0:
+            cls.objects.filter(pk=est.pk).update(
+                quantidade_garrafas=F('quantidade_garrafas') + garrafas
+            )
+        if doses > 0:
+            cls.objects.filter(pk=est.pk).update(
+                quantidade_doses=F('quantidade_doses') + doses
+            )
+
+    @classmethod
+    @transaction.atomic
+    def transferir(cls, origem, destino, produto,
+                   garrafas: Decimal = Decimal('0'), doses: Decimal = Decimal('0')) -> bool:
+        """Débito e crédito na MESMA transação e com as duas linhas travadas."""
+        garrafas = Decimal(garrafas or 0)
+        doses    = Decimal(doses or 0)
+
+        # trava as duas linhas envolvidas
+        est_origem, _ = (cls.objects.select_for_update()
+                         .get_or_create(bar=origem, produto=produto,
+                                        defaults={'quantidade_garrafas': Decimal('0'),
+                                                  'quantidade_doses': Decimal('0')}))
+        est_dest, _   = (cls.objects.select_for_update()
+                         .get_or_create(bar=destino, produto=produto,
+                                        defaults={'quantidade_garrafas': Decimal('0'),
+                                                  'quantidade_doses': Decimal('0')}))
+
+        # checa disponibilidade independente
+        if garrafas > 0 and est_origem.quantidade_garrafas < garrafas:
+            return False
+        if doses > 0 and est_origem.quantidade_doses < doses:
+            return False
+
+        # faz as duas pernas com F() (atômico)
+        if garrafas > 0:
+            cls.objects.filter(pk=est_origem.pk).update(
+                quantidade_garrafas=F('quantidade_garrafas') - garrafas
+            )
+            cls.objects.filter(pk=est_dest.pk).update(
+                quantidade_garrafas=F('quantidade_garrafas') + garrafas
+            )
+        if doses > 0:
+            cls.objects.filter(pk=est_origem.pk).update(
+                quantidade_doses=F('quantidade_doses') - doses
+            )
+            cls.objects.filter(pk=est_dest.pk).update(
+                quantidade_doses=F('quantidade_doses') + doses
+            )
+        return True
 
 
 

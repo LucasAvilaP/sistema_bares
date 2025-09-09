@@ -26,7 +26,7 @@ from openpyxl.utils import get_column_letter
 from django.http import HttpResponse
 from openpyxl import Workbook
 from django.contrib.auth.decorators import user_passes_test
-from django.db.models import DateField
+from django.db.models import DateField, F
 from django.core.files.storage import default_storage
 from django.db.models.functions import TruncDate
 from collections import defaultdict, OrderedDict
@@ -223,48 +223,84 @@ def aprovar_requisicoes_view(request):
         return redirect('dashboard')
 
     restaurante_id = request.session.get('restaurante_id')
-    requisicoes = RequisicaoProduto.objects.filter(restaurante_id=restaurante_id, status='PENDENTE')
+    requisicoes_pend = RequisicaoProduto.objects.filter(restaurante_id=restaurante_id, status='PENDENTE')
     restaurante = get_object_or_404(Restaurante, id=restaurante_id)
     bar_central = get_object_or_404(Bar, restaurante=restaurante, is_estoque_central=True)
 
     if request.method == 'POST':
-        erros = []
-        for key in request.POST:
-            if not key.startswith('aprovacao_'):
-                continue
+        # 1) Colete decisões do form
+        decisoes = {}
+        for key, val in request.POST.items():
+            if key.startswith('aprovacao_'):
+                try:
+                    req_id = int(key.split('_')[1])
+                    decisoes[req_id] = val
+                except (ValueError, IndexError):
+                    continue
 
-            req_id = key.split('_')[1]
-            decisao = request.POST.get(key)
-            requisicao = get_object_or_404(
-                RequisicaoProduto, id=req_id, restaurante_id=restaurante_id, status='PENDENTE'
-            )
+        if not decisoes:
+            messages.info(request, "Nenhuma requisição selecionada.")
+            return redirect('aprovar-requisicoes')
+
+        # 2) Busque as PENDENTES escolhidas e processe em ORDEM de chegada
+        qs = (RequisicaoProduto.objects
+              .filter(id__in=decisoes.keys(), restaurante_id=restaurante_id, status='PENDENTE')
+              .select_related('produto', 'bar')
+              .order_by('data_solicitacao', 'id'))
+
+        erros = []
+
+        for requisicao in qs:
+            decisao = decisoes.get(requisicao.id)
 
             if decisao == 'aprovar':
                 qtd = Decimal(requisicao.quantidade_solicitada)
-                sucesso = EstoqueBar.retirar(bar_central, requisicao.produto, qtd)
 
-                if sucesso:
-                    # ➕ Apenas movimenta os estoques (sem criar TransferenciaBar)
-                    EstoqueBar.adicionar(requisicao.bar, requisicao.produto, qtd)
+                try:
+                        with transaction.atomic():
+                            est_central, _ = (EstoqueBar.objects
+                                .select_for_update()
+                                .get_or_create(
+                                    bar=bar_central, produto=requisicao.produto,
+                                    defaults={'quantidade_garrafas': Decimal('0'),
+                                                'quantidade_doses': Decimal('0')}
+                                    ))
 
-                    requisicao.status = 'APROVADA'
-                    messages.success(request, "Requisição aprovada com sucesso.")
-                else:
-                    requisicao.status = 'FALHA_ESTOQUE'
-                    requisicao.motivo_negativa = "Produto insuficiente no estoque central."
-                    messages.warning(
-                        request,
-                        f"Produto '{requisicao.produto.nome}' insuficiente no estoque central. Requisição {req_id} não aprovada."
-                    )
+                        if est_central.quantidade_garrafas >= qtd and qtd > 0:
+                            # debita central
+                            EstoqueBar.objects.filter(pk=est_central.pk).update(
+                                quantidade_garrafas=F('quantidade_garrafas') - qtd
+                            )
 
-                requisicao.usuario_aprovador = request.user
-                requisicao.data_decisao = timezone.now()
-                requisicao.save()
+                            # credita destino (também travado)
+                            est_dest, _ = (EstoqueBar.objects
+                                        .select_for_update()
+                                        .get_or_create(
+                                            bar=requisicao.bar, produto=requisicao.produto,
+                                            defaults={'quantidade_garrafas': Decimal('0'),
+                                                        'quantidade_doses': Decimal('0')}
+                                        ))
+                            EstoqueBar.objects.filter(pk=est_dest.pk).update(
+                                quantidade_garrafas=F('quantidade_garrafas') + qtd
+                            )
+
+                            requisicao.status = 'APROVADA'
+                            messages.success(request, f"Requisição {requisicao.id} aprovada ({requisicao.produto.nome}).")
+                        else:
+                            requisicao.status = 'FALHA_ESTOQUE'
+                            requisicao.motivo_negativa = "Produto insuficiente no estoque central."
+                            messages.warning(request, f"Requisição {requisicao.id}: estoque insuficiente para {requisicao.produto.nome}.")
+
+                        requisicao.usuario_aprovador = request.user
+                        requisicao.data_decisao = timezone.now()
+                        requisicao.save()
+                except Exception as e:
+                    erros.append(f"Erro ao aprovar a requisição {requisicao.id}: {e}")
 
             elif decisao == 'negar':
-                motivo = (request.POST.get(f'motivo_{req_id}', '') or '').strip()
+                motivo = (request.POST.get(f'motivo_{requisicao.id}', '') or '').strip()
                 if not motivo:
-                    erros.append(f"Informe o motivo da negativa para a requisição {req_id}.")
+                    erros.append(f"Informe o motivo da negativa para a requisição {requisicao.id}.")
                     continue
 
                 requisicao.status = 'NEGADA'
@@ -272,14 +308,14 @@ def aprovar_requisicoes_view(request):
                 requisicao.usuario_aprovador = request.user
                 requisicao.data_decisao = timezone.now()
                 requisicao.save()
-                messages.info(request, f"Requisição {req_id} negada.")
+                messages.info(request, f"Requisição {requisicao.id} negada.")
 
-        if erros:
-            for e in erros:
-                messages.error(request, e)
+        for e in erros:
+            messages.error(request, e)
+
         return redirect('aprovar-requisicoes')
 
-    return render(request, 'core/aprovar_requisicoes.html', {'requisicoes': requisicoes})
+    return render(request, 'core/aprovar_requisicoes.html', {'requisicoes': requisicoes_pend})
 
 
 
