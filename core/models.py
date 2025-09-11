@@ -34,13 +34,17 @@ class Produto(models.Model):
     )
 
     nome = models.CharField(max_length=100)
-    codigo = models.CharField(  # <-- novo
-        max_length=30, unique=True, db_index=True,
-        blank=True, null=True  # depois dá pra tornar obrigatório
-    )
+    codigo = models.CharField(max_length=30, unique=True, db_index=True, blank=True, null=True)
     unidade_medida = models.CharField(max_length=20, default='un')
     categoria = models.CharField(max_length=20, choices=CATEGORIAS)
+
+    # Existente: opcional, continua útil
     doses_por_garrafa = models.PositiveIntegerField(null=True, blank=True)
+
+    # NOVOS:
+    volume_garrafa_ml = models.PositiveIntegerField(null=True, blank=True, help_text="Ex.: 700, 750, 770, 1000, 1750")
+    dose_padrao_ml = models.PositiveIntegerField(default=50, help_text="Tamanho da dose padrão em mL (padrão 50)")
+
     ativo = models.BooleanField(default=True)
 
     class Meta:
@@ -48,6 +52,19 @@ class Produto(models.Model):
 
     def __str__(self):
         return self.nome
+
+    # Helpers (opcionais, mas práticos):
+    def get_dose_ml(self) -> int:
+        return self.dose_padrao_ml or 50
+
+    def get_doses_por_garrafa(self):
+        """
+        Prioriza volume_garrafa_ml, senão cai para doses_por_garrafa.
+        """
+        if self.volume_garrafa_ml and self.get_dose_ml():
+            return round(self.volume_garrafa_ml / self.get_dose_ml())
+        return self.doses_por_garrafa or 0
+
 
 
 

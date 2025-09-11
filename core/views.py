@@ -12,6 +12,7 @@ from django.core.paginator import Paginator
 from django.db import transaction
 from django.core.exceptions import FieldError
 import uuid
+from core.utils import calcular_totais_ml_e_doses
 import pandas as pd
 import openpyxl
 import io
@@ -1888,13 +1889,15 @@ def relatorio_consolidado_view(request):
 
 SHIFT_START_HOUR = 19  # início do "dia operacional": 19:00
 
+SHIFT_START_HOUR = 19  # início do "dia operacional": 19:00
+
 @login_required
 def relatorio_contagem_atual(request):
     bar_id = request.session.get('bar_id')
     if not bar_id:
         return render(request, 'erro.html', {'mensagem': 'Nenhum bar selecionado.'})
 
-    bar_atual = Bar.objects.get(id=bar_id)
+    bar_atual = get_object_or_404(Bar, id=bar_id)
     restaurante = bar_atual.restaurante
     bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
 
@@ -1910,11 +1913,9 @@ def relatorio_contagem_atual(request):
             tz = timezone.get_current_timezone()
 
             if modo == 'calendario':
-                # 00:00 -> 23:59 do dia escolhido
                 inicio = timezone.make_aware(datetime.combine(dia, time(0, 0, 0)), tz)
                 fim    = inicio + timedelta(days=1)
             else:
-                # Dia operacional: 19:00 do dia escolhido -> 18:59 do dia seguinte
                 start_naive = datetime.combine(dia, time(SHIFT_START_HOUR, 0, 0))
                 inicio = timezone.make_aware(start_naive, tz)
                 fim    = inicio + timedelta(days=1)
@@ -1924,27 +1925,48 @@ def relatorio_contagem_atual(request):
             messages.warning(request, "Data inválida no filtro; exibindo contagem atual.")
 
     dados_por_bar = {}
-    somatorio_total = defaultdict(lambda: {'garrafas': 0, 'doses': 0.0, 'produto': None})
+    somatorio_total = defaultdict(lambda: {
+        'produto': None,
+        'garrafas': 0,
+        'doses': 0.0,
+        'total_ml': 0.0,
+        'doses_equivalentes': 0.0,
+    })
 
     for bar in bares:
-        qs = ContagemBar.objects.filter(bar=bar).order_by('-data_contagem')
+        qs = ContagemBar.objects.filter(bar=bar).order_by('-data_contagem', '-id')
         if use_range:
             qs = qs.filter(data_contagem__gte=inicio, data_contagem__lt=fim)
 
-        # Pega a ÚLTIMA contagem de cada produto dentro do período (ou no geral, se sem filtro)
+        # última contagem por produto no período
         ultima_por_produto = {}
         for c in qs:
             if c.produto_id not in ultima_por_produto:
                 ultima_por_produto[c.produto_id] = c
 
         contagens_finais = list(ultima_por_produto.values())
-        dados_por_bar[bar.nome] = contagens_finais
+        dados_por_bar[bar.nome] = []
 
         for c in contagens_finais:
             pid = c.produto_id
+            doses = float(c.quantidade_doses_restantes or 0)
+            garrafas = c.quantidade_garrafas_cheias or 0
+
+            total_ml, doses_eq, _ = calcular_totais_ml_e_doses(c.produto, garrafas, doses)
+
+            # linha do bar para render no template
+            dados_por_bar[bar.nome].append({
+                'contagem': c,
+                'total_ml': float(total_ml),
+                'doses_equivalentes': float(doses_eq),
+            })
+
+            # somatório por produto no restaurante
             somatorio_total[pid]['produto'] = c.produto
-            somatorio_total[pid]['garrafas'] += c.quantidade_garrafas_cheias or 0
-            somatorio_total[pid]['doses']    += float(c.quantidade_doses_restantes or 0)
+            somatorio_total[pid]['garrafas'] += garrafas
+            somatorio_total[pid]['doses']    += doses
+            somatorio_total[pid]['total_ml'] += float(total_ml)
+            somatorio_total[pid]['doses_equivalentes'] += float(doses_eq)
 
     context = {
         'dados_por_bar': dados_por_bar,
@@ -1958,6 +1980,7 @@ def relatorio_contagem_atual(request):
         'SHIFT_START_HOUR': SHIFT_START_HOUR,
     }
     return render(request, 'core/relatorios/contagem_atual.html', context)
+
 
 
 
@@ -3153,16 +3176,18 @@ def relatorio_consolidado_excel_view(request):
 
 
 
+SHIFT_START_HOUR = 19  # mantenha igual à view da tela
+
 @login_required
 def exportar_contagem_atual_excel(request):
     bar_id = request.session.get('bar_id')
     if not bar_id:
         return HttpResponse("Nenhum bar selecionado.", status=400)
 
-    bar_atual = Bar.objects.only('id', 'restaurante').get(id=bar_id)
+    bar_atual = get_object_or_404(Bar, id=bar_id)
     restaurante = bar_atual.restaurante
 
-    # --------- Filtros vindos do form (iguais à view) ---------
+    # --------- Filtros (iguais à view) ---------
     filtro_data_str = (request.GET.get('data') or '').strip()   # YYYY-MM-DD
     modo = (request.GET.get('modo') or 'operacional').lower()   # 'operacional' | 'calendario'
 
@@ -3182,14 +3207,19 @@ def exportar_contagem_atual_excel(request):
                 fim    = inicio + timedelta(days=1)
             use_range = True
         except ValueError:
-            # se a data vier inválida, segue como "sem filtro"
             pass
 
-    # --------- Montagem dos dados (mesmo critério da tela) ---------
+    # --------- Montagem dos dados ---------
     bares = Bar.objects.filter(restaurante=restaurante).only('id', 'nome').order_by('nome')
 
     dados_por_bar = {}
-    somatorio_total = defaultdict(lambda: {'garrafas': 0, 'doses': 0.0, 'produto': None})
+    somatorio_total = defaultdict(lambda: {
+        'produto': None,
+        'garrafas': 0,
+        'doses': 0.0,
+        'total_ml': 0.0,
+        'doses_equivalentes': 0.0,
+    })
 
     for bar in bares:
         qs = ContagemBar.objects.filter(bar=bar).order_by('-data_contagem', '-id')
@@ -3205,10 +3235,16 @@ def exportar_contagem_atual_excel(request):
         dados_por_bar[bar.nome] = contagens_finais
 
         for c in contagens_finais:
+            doses = float(c.quantidade_doses_restantes or 0)
+            garrafas = c.quantidade_garrafas_cheias or 0
+            total_ml, doses_eq, _ = calcular_totais_ml_e_doses(c.produto, garrafas, doses)
+
             pid = c.produto_id
             somatorio_total[pid]['produto'] = c.produto
-            somatorio_total[pid]['garrafas'] += c.quantidade_garrafas_cheias or 0
-            somatorio_total[pid]['doses']    += float(c.quantidade_doses_restantes or 0)
+            somatorio_total[pid]['garrafas'] += garrafas
+            somatorio_total[pid]['doses']    += doses
+            somatorio_total[pid]['total_ml'] += float(total_ml)
+            somatorio_total[pid]['doses_equivalentes'] += float(doses_eq)
 
     # --------- Excel ---------
     output = io.BytesIO()
@@ -3225,13 +3261,14 @@ def exportar_contagem_atual_excel(request):
     f_num   = workbook.add_format({'border': 1, 'num_format': '#,##0.00'})
     f_dt    = workbook.add_format({'border': 1, 'num_format': 'dd/mm/yyyy hh:mm'})
 
-    # Larguras padrão
+    # Larguras
     ws.set_column(0, 0, 34)  # Produto
     ws.set_column(1, 1, 18)  # Garrafas
-    ws.set_column(2, 2, 18)  # Doses
-    ws.set_column(3, 3, 20)  # Doses ML
-    ws.set_column(4, 4, 22)  # Data
-    ws.set_column(5, 5, 18)  # Usuário
+    ws.set_column(2, 2, 18)  # Doses Avulsas
+    ws.set_column(3, 3, 18)  # Total (mL)
+    ws.set_column(4, 4, 18)  # Doses Equiv.
+    ws.set_column(5, 5, 22)  # Data
+    ws.set_column(6, 6, 18)  # Usuário
 
     row = 0
 
@@ -3245,16 +3282,17 @@ def exportar_contagem_atual_excel(request):
 
     # ===== Totais do restaurante =====
     ws.write(row, 0, "Total por Produto no Restaurante", f_bold); row += 1
-    headers_total = ["Produto", "Total de Garrafas", "Total de Doses", "Total de Doses (ML)"]
+    headers_total = ["Produto", "Total de Garrafas", "Total de Doses Avulsas", "Total (mL)", "Doses Equivalentes Totais"]
     for col, h in enumerate(headers_total):
         ws.write(row, col, h, f_head)
     row += 1
 
     for item in somatorio_total.values():
-        ws.write(row, 0, item['produto'].nome, f_cell)
+        ws.write(row, 0, item['produto'].nome if item['produto'] else '-', f_cell)
         ws.write(row, 1, item['garrafas'], f_cell)
         ws.write(row, 2, item['doses'], f_num)
-        ws.write(row, 3, item['doses'] * 50, f_num)
+        ws.write(row, 3, item['total_ml'], f_num)
+        ws.write(row, 4, item['doses_equivalentes'], f_num)
         row += 1
 
     row += 2  # espaço
@@ -3263,24 +3301,28 @@ def exportar_contagem_atual_excel(request):
     for bar_nome, contagens in dados_por_bar.items():
         ws.write(row, 0, f"Bar: {bar_nome}", f_bold); row += 1
 
-        headers = ["Produto", "Garrafas", "Doses", "Doses (ML)", "Data da Contagem", "Usuário"]
+        headers = ["Produto", "Garrafas", "Doses Avulsas", "Total (mL)", "Doses Equiv.", "Data da Contagem", "Usuário"]
         for col, h in enumerate(headers):
             ws.write(row, col, h, f_head2)
         row += 1
 
         for c in contagens:
             doses = float(c.quantidade_doses_restantes or 0)
+            garrafas = c.quantidade_garrafas_cheias or 0
+            total_ml, doses_eq, _ = calcular_totais_ml_e_doses(c.produto, garrafas, doses)
+
             ws.write(row, 0, c.produto.nome, f_cell)
-            ws.write(row, 1, c.quantidade_garrafas_cheias, f_cell)
+            ws.write(row, 1, garrafas, f_cell)
             ws.write(row, 2, doses, f_num)
-            ws.write(row, 3, doses * 50, f_num)
+            ws.write(row, 3, float(total_ml), f_num)
+            ws.write(row, 4, float(doses_eq), f_num)
 
             # Data local (sem tz) para o Excel
-            dt_local = timezone.localtime(c.data_contagem)
-            ws.write_datetime(row, 4, dt_local.replace(tzinfo=None), f_dt)
+            dt_local = timezone.localtime(c.data_contagem).replace(tzinfo=None)
+            ws.write_datetime(row, 5, dt_local, f_dt)
 
             username = getattr(c.usuario, 'username', '-')
-            ws.write(row, 5, username, f_cell)
+            ws.write(row, 6, username, f_cell)
             row += 1
 
         row += 2  # espaço entre bares
