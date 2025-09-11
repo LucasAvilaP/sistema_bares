@@ -202,7 +202,7 @@ def requisicao_produtos_view(request):
         if produtos_requisitados:
             messages.success(
                 request,
-                f"Requisição enviada para: {', '.join(produtos_requisitados)}"
+                f"Requisição enviada: {', '.join(produtos_requisitados)}"
             )
 
         if erros:
@@ -269,7 +269,7 @@ def aprovar_requisicoes_view(request):
                 if qtd <= 0:
                     requisicao.status = 'FALHA_ESTOQUE'
                     requisicao.motivo_negativa = "Quantidade inválida."
-                    messages.warning(request, f"Requisição {requisicao.id}: quantidade inválida.")
+                    messages.warning(request, f"Requisição: quantidade inválida.")
                 else:
                     try:
                         ok = EstoqueBar.transferir(
@@ -281,17 +281,17 @@ def aprovar_requisicoes_view(request):
                         if ok:
                             requisicao.status = 'APROVADA'
                             messages.success(
-                                request, f"Requisição {requisicao.id} aprovada ({requisicao.produto.nome})."
+                                request, f"Requisição aprovada ({requisicao.produto.nome})."
                             )
                         else:
                             requisicao.status = 'FALHA_ESTOQUE'
                             requisicao.motivo_negativa = "Produto insuficiente no estoque central."
                             messages.warning(
                                 request,
-                                f"Requisição {requisicao.id}: estoque insuficiente para {requisicao.produto.nome}."
+                                f"Requisição: estoque insuficiente para {requisicao.produto.nome}."
                             )
                     except Exception as e:
-                        erros.append(f"Erro ao aprovar a requisição {requisicao.id}: {e}")
+                        erros.append(f"Erro ao aprovar a requisição: {e}")
 
                 requisicao.usuario_aprovador = request.user
                 requisicao.data_decisao = timezone.now()
@@ -300,7 +300,7 @@ def aprovar_requisicoes_view(request):
             elif decisao == 'negar':
                 motivo = (request.POST.get(f'motivo_{requisicao.id}', '') or '').strip()
                 if not motivo:
-                    erros.append(f"Informe o motivo da negativa para a requisição {requisicao.id}.")
+                    erros.append(f"Informe o motivo da negativa para a requisição.")
                     continue
 
                 requisicao.status = 'NEGADA'
@@ -308,7 +308,7 @@ def aprovar_requisicoes_view(request):
                 requisicao.usuario_aprovador = request.user
                 requisicao.data_decisao = timezone.now()
                 requisicao.save()
-                messages.info(request, f"Requisição {requisicao.id} negada.")
+                messages.info(request, f"Requisição negada.")
 
         for e in erros:
             messages.error(request, e)
