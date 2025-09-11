@@ -223,7 +223,12 @@ def aprovar_requisicoes_view(request):
         return redirect('dashboard')
 
     restaurante_id = request.session.get('restaurante_id')
-    requisicoes_pend = RequisicaoProduto.objects.filter(restaurante_id=restaurante_id, status='PENDENTE')
+
+    # Pendentes só para renderização inicial
+    requisicoes_pend = RequisicaoProduto.objects.filter(
+        restaurante_id=restaurante_id, status='PENDENTE'
+    )
+
     restaurante = get_object_or_404(Restaurante, id=restaurante_id)
     bar_central = get_object_or_404(Bar, restaurante=restaurante, is_estoque_central=True)
 
@@ -233,7 +238,7 @@ def aprovar_requisicoes_view(request):
         for key, val in request.POST.items():
             if key.startswith('aprovacao_'):
                 try:
-                    req_id = int(key.split('_')[1])
+                    req_id = int(key.split('_', 1)[1])
                     decisoes[req_id] = val
                 except (ValueError, IndexError):
                     continue
@@ -243,10 +248,12 @@ def aprovar_requisicoes_view(request):
             return redirect('aprovar-requisicoes')
 
         # 2) Busque as PENDENTES escolhidas e processe em ORDEM de chegada
-        qs = (RequisicaoProduto.objects
-              .filter(id__in=decisoes.keys(), restaurante_id=restaurante_id, status='PENDENTE')
-              .select_related('produto', 'bar')
-              .order_by('data_solicitacao', 'id'))
+        qs = (
+            RequisicaoProduto.objects
+            .filter(id__in=decisoes.keys(), restaurante_id=restaurante_id, status='PENDENTE')
+            .select_related('produto', 'bar')
+            .order_by('data_solicitacao', 'id')
+        )
 
         erros = []
 
@@ -254,48 +261,41 @@ def aprovar_requisicoes_view(request):
             decisao = decisoes.get(requisicao.id)
 
             if decisao == 'aprovar':
-                qtd = Decimal(requisicao.quantidade_solicitada)
-
                 try:
-                        with transaction.atomic():
-                            est_central, _ = (EstoqueBar.objects
-                                .select_for_update()
-                                .get_or_create(
-                                    bar=bar_central, produto=requisicao.produto,
-                                    defaults={'quantidade_garrafas': Decimal('0'),
-                                                'quantidade_doses': Decimal('0')}
-                                    ))
+                    qtd = Decimal(requisicao.quantidade_solicitada or 0)
+                except Exception:
+                    qtd = Decimal('0')
 
-                        if est_central.quantidade_garrafas >= qtd and qtd > 0:
-                            # debita central
-                            EstoqueBar.objects.filter(pk=est_central.pk).update(
-                                quantidade_garrafas=F('quantidade_garrafas') - qtd
-                            )
-
-                            # credita destino (também travado)
-                            est_dest, _ = (EstoqueBar.objects
-                                        .select_for_update()
-                                        .get_or_create(
-                                            bar=requisicao.bar, produto=requisicao.produto,
-                                            defaults={'quantidade_garrafas': Decimal('0'),
-                                                        'quantidade_doses': Decimal('0')}
-                                        ))
-                            EstoqueBar.objects.filter(pk=est_dest.pk).update(
-                                quantidade_garrafas=F('quantidade_garrafas') + qtd
-                            )
-
+                if qtd <= 0:
+                    requisicao.status = 'FALHA_ESTOQUE'
+                    requisicao.motivo_negativa = "Quantidade inválida."
+                    messages.warning(request, f"Requisição {requisicao.id}: quantidade inválida.")
+                else:
+                    try:
+                        ok = EstoqueBar.transferir(
+                            origem=bar_central,
+                            destino=requisicao.bar,
+                            produto=requisicao.produto,
+                            garrafas=qtd
+                        )
+                        if ok:
                             requisicao.status = 'APROVADA'
-                            messages.success(request, f"Requisição {requisicao.id} aprovada ({requisicao.produto.nome}).")
+                            messages.success(
+                                request, f"Requisição {requisicao.id} aprovada ({requisicao.produto.nome})."
+                            )
                         else:
                             requisicao.status = 'FALHA_ESTOQUE'
                             requisicao.motivo_negativa = "Produto insuficiente no estoque central."
-                            messages.warning(request, f"Requisição {requisicao.id}: estoque insuficiente para {requisicao.produto.nome}.")
+                            messages.warning(
+                                request,
+                                f"Requisição {requisicao.id}: estoque insuficiente para {requisicao.produto.nome}."
+                            )
+                    except Exception as e:
+                        erros.append(f"Erro ao aprovar a requisição {requisicao.id}: {e}")
 
-                        requisicao.usuario_aprovador = request.user
-                        requisicao.data_decisao = timezone.now()
-                        requisicao.save()
-                except Exception as e:
-                    erros.append(f"Erro ao aprovar a requisição {requisicao.id}: {e}")
+                requisicao.usuario_aprovador = request.user
+                requisicao.data_decisao = timezone.now()
+                requisicao.save()
 
             elif decisao == 'negar':
                 motivo = (request.POST.get(f'motivo_{requisicao.id}', '') or '').strip()
@@ -316,6 +316,7 @@ def aprovar_requisicoes_view(request):
         return redirect('aprovar-requisicoes')
 
     return render(request, 'core/aprovar_requisicoes.html', {'requisicoes': requisicoes_pend})
+
 
 
 
@@ -3338,6 +3339,19 @@ def _apply_body_borders(ws, start_row, end_row, start_col, end_col):
         for c in range(start_col, end_col + 1):
             ws.cell(row=r, column=c).border = border
 
+def _fmt_local(dt):
+    if not dt:
+        return None
+    # Se vier ciente de fuso (UTC), converte para TIME_ZONE do Django
+    if timezone.is_aware(dt):
+        dt = timezone.localtime(dt)
+    else:
+        # Se vier “naive”, trata como sendo no fuso padrão do projeto
+        dt = timezone.make_aware(dt, timezone.get_default_timezone())
+        dt = timezone.localtime(dt)
+    return dt.strftime('%d/%m/%Y %H:%M')
+
+
 @login_required
 def exportar_diferenca_contagens_excel(request):
     bar_id = request.session.get('bar_id')
@@ -3538,9 +3552,9 @@ def exportar_diferenca_contagens_excel(request):
             for c in (c_pd, c_ud, c_dd, c_ml):
                 if c is not None: c.number_format = "0.00"
 
-            ws2.cell(row=r2, column=10, value=L['data_p'].strftime('%d/%m/%Y %H:%M') if L['data_p'] else None)
+            ws2.cell(row=r2, column=10, value=_fmt_local(L['data_p']))
             ws2.cell(row=r2, column=11, value=L['user_p'] or None)
-            ws2.cell(row=r2, column=12, value=L['data_u'].strftime('%d/%m/%Y %H:%M'))
+            ws2.cell(row=r2, column=12, value=_fmt_local(L['data_u']))
             ws2.cell(row=r2, column=13, value=L['user_u'] or None)
 
             r2 += 1
