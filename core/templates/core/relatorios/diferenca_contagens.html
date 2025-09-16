@@ -5,11 +5,11 @@
 {% block content %}
 <h2 class="text-2xl font-bold mb-4">📊 Diferença entre Penúltima e Última Contagem — {{ restaurante.nome }}</h2>
 
-
 <p class="text-gray-600 mb-4">
     Este relatório compara, para cada produto, a <strong>penúltima</strong> contagem com a <strong>última</strong> contagem, exibindo
     a diferença como <strong>Última − Penúltima</strong>. Valores positivos indicam aumento; negativos indicam redução.
 </p>
+
 <div class="d-flex justify-content-start mb-3">
   <a href="{% url 'exportar_diferenca_contagens_excel' %}"
      class="btn btn-success btn-sm d-inline-flex align-items-center">
@@ -18,165 +18,169 @@
   </a>
 </div>
 
-
 {% if somatorio_total %}
-    <h3 class="text-xl font-semibold mt-6 mb-2 border-b border-gray-300 pb-1 text-indigo-700">
-        🔎 Consolidado de Diferenças por Produto
-        <span class="text-sm text-gray-500">(Última − Penúltima)</span>
-    </h3>
-    <table class="table-auto w-full border-collapse border border-indigo-500 mb-6 text-sm">
-        <thead class="bg-indigo-100">
-            <tr>
-                <th class="border px-3 py-2 text-left">Produto</th>
-                <th class="border px-3 py-2 text-right">Garrafas</th>
-                <th class="border px-3 py-2 text-right">Doses</th>
-                <th class="border px-3 py-2 text-right">Doses (ML)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for item in somatorio_total.values %}
-                <tr>
-                    <td class="border px-3 py-2">{{ item.produto.nome }}</td>
-                    <td class="border px-3 py-2 text-right">{{ item.diff_garrafas|floatformat:0 }}</td>
-                    <td class="border px-3 py-2 text-right">{{ item.diff_doses|floatformat:2 }}</td>
-                    <td class="border px-3 py-2 text-right">{{ item.diff_doses|floatval|mul:50|floatformat:2 }}</td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+  <h3 class="text-xl font-semibold mt-6 mb-2 border-b border-gray-300 pb-1 text-indigo-700">
+    🔎 Consolidado de Diferenças por Produto
+    <span class="text-sm text-gray-500">(Última − Penúltima)</span>
+  </h3>
+
+  <table class="table-auto w-full border-collapse border border-indigo-500 mb-6 text-sm">
+    <thead class="bg-indigo-100">
+      <tr>
+        <th class="border px-3 py-2 text-left">Produto</th>
+        <!-- NOVA COLUNA NO CONSOLIDADO -->
+        <th class="border px-3 py-2 text-right">Entradas (G)</th>
+        <th class="border px-3 py-2 text-right">Garrafas</th>
+        <th class="border px-3 py-2 text-right">Doses</th>
+        <th class="border px-3 py-2 text-right">Doses (ML)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in somatorio_total.values %}
+        <tr>
+          <td class="border px-3 py-2">{{ item.produto.nome }}</td>
+          <!-- Usa o campo calculado na view -->
+          <td class="border px-3 py-2 text-right">{{ item.entradas_g|floatformat:2 }}</td>
+          <td class="border px-3 py-2 text-right">{{ item.diff_garrafas|floatformat:0 }}</td>
+          <td class="border px-3 py-2 text-right">{{ item.diff_doses|floatformat:2 }}</td>
+          <td class="border px-3 py-2 text-right">{{ item.diff_doses|floatval|mul:50|floatformat:2 }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 {% endif %}
 
 {% if dados_por_bar %}
-    {% for bar, linhas in dados_por_bar.items %}
-        <h3 class="text-lg font-semibold mt-6 mb-2 border-b border-gray-200 pb-1">
-            🍺 {{ bar }} — {{ linhas|length }} produto(s)
-        </h3>
+  {% for bar, linhas in dados_por_bar.items %}
+    <h3 class="text-lg font-semibold mt-6 mb-2 border-b border-gray-200 pb-1">
+      🍺 {{ bar }} — {{ linhas|length }} produto(s)
+    </h3>
 
-        <table class="table-auto w-full border-collapse border border-gray-300 mb-6 text-sm">
-            <thead class="bg-gray-100">
-                <tr>
-                    <th class="border px-3 py-2 text-left">Produto</th>
+    <table class="table-auto w-full border-collapse border border-gray-300 mb-6 text-sm">
+      <thead class="bg-gray-100">
+        <tr>
+          <th class="border px-3 py-2 text-left">Produto</th>
 
-                    <!-- Penúltima primeiro -->
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>Penúltima</span>
-                            <small class="text-gray-500">Garrafas</small>
-                        </div>
-                    </th>
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>Penúltima</span>
-                            <small class="text-gray-500">Doses</small>
-                        </div>
-                    </th>
+          <!-- Penúltima primeiro -->
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>Penúltima</span>
+              <small class="text-gray-500">Garrafas</small>
+            </div>
+          </th>
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>Penúltima</span>
+              <small class="text-gray-500">Doses</small>
+            </div>
+          </th>
 
-                    <!-- Última depois -->
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>Última</span>
-                            <small class="text-gray-500">Garrafas</small>
-                        </div>
-                    </th>
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>Última</span>
-                            <small class="text-gray-500">Doses</small>
-                        </div>
-                    </th>
+          <!-- Última depois -->
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>Última</span>
+              <small class="text-gray-500">Garrafas</small>
+            </div>
+          </th>
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>Última</span>
+              <small class="text-gray-500">Doses</small>
+            </div>
+          </th>
 
-                    <!-- Diferenças -->
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>diferença</span>
-                            <small class="text-gray-500">Garrafas</small>
-                        </div>
-                    </th>
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>diferença</span>
-                            <small class="text-gray-500">Doses</small>
-                        </div>
-                    </th>
-                    <th class="border px-3 py-2 text-right">
-                        <div class="flex flex-col leading-tight">
-                            <span>diferença</span>
-                            <small class="text-gray-500">Doses (ML)</small>
-                        </div>
-                    </th>
+          <!-- Diferenças -->
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>diferença</span>
+              <small class="text-gray-500">Garrafas</small>
+            </div>
+          </th>
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>diferença</span>
+              <small class="text-gray-500">Doses</small>
+            </div>
+          </th>
+          <th class="border px-3 py-2 text-right">
+            <div class="flex flex-col leading-tight">
+              <span>diferença</span>
+              <small class="text-gray-500">Doses (ML)</small>
+            </div>
+          </th>
 
-                    <!-- Datas / Usuários alinhados à nova ordem -->
-                    <th class="border px-3 py-2 text-left">
-                        <div class="flex flex-col leading-tight">
-                            <span>Data</span>
-                            <small class="text-gray-500">(Penúltima)</small>
-                        </div>
-                    </th>
-                    <th class="border px-3 py-2 text-left">
-                        <div class="flex flex-col leading-tight">
-                            <span>Usuário</span>
-                            <small class="text-gray-500">(Penúltima)</small>
-                        </div>
-                    </th>
+          <!-- Datas / Usuários alinhados à nova ordem -->
+          <th class="border px-3 py-2 text-left">
+            <div class="flex flex-col leading-tight">
+              <span>Data</span>
+              <small class="text-gray-500">(Penúltima)</small>
+            </div>
+          </th>
+          <th class="border px-3 py-2 text-left">
+            <div class="flex flex-col leading-tight">
+              <span>Usuário</span>
+              <small class="text-gray-500">(Penúltima)</small>
+            </div>
+          </th>
 
-                    <th class="border px-3 py-2 text-left">
-                        <div class="flex flex-col leading-tight">
-                            <span>Data</span>
-                            <small class="text-gray-500">(Última)</small>
-                        </div>
-                    </th>
-                    <th class="border px-3 py-2 text-left">
-                        <div class="flex flex-col leading-tight">
-                            <span>Usuário</span>
-                            <small class="text-gray-500">(Última)</small>
-                        </div>
-                    </th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for linha in linhas %}
-                    <tr>
-                        <td class="border px-3 py-2">{{ linha.produto.nome }}</td>
+          <th class="border px-3 py-2 text-left">
+            <div class="flex flex-col leading-tight">
+              <span>Data</span>
+              <small class="text-gray-500">(Última)</small>
+            </div>
+          </th>
+          <th class="border px-3 py-2 text-left">
+            <div class="flex flex-col leading-tight">
+              <span>Usuário</span>
+              <small class="text-gray-500">(Última)</small>
+            </div>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for linha in linhas %}
+          <tr>
+            <td class="border px-3 py-2">{{ linha.produto.nome }}</td>
 
-                        <!-- Penúltima -->
-                        <td class="border px-3 py-2 text-right">
-                            {% if linha.p_g is not None %}{{ linha.p_g|floatformat:0 }}{% else %}—{% endif %}
-                        </td>
-                        <td class="border px-3 py-2 text-right">
-                            {% if linha.p_d is not None %}{{ linha.p_d|floatformat:2 }}{% else %}—{% endif %}
-                        </td>
+            <!-- Penúltima -->
+            <td class="border px-3 py-2 text-right">
+              {% if linha.p_g is not None %}{{ linha.p_g|floatformat:0 }}{% else %}—{% endif %}
+            </td>
+            <td class="border px-3 py-2 text-right">
+              {% if linha.p_d is not None %}{{ linha.p_d|floatformat:2 }}{% else %}—{% endif %}
+            </td>
 
-                        <!-- Última -->
-                        <td class="border px-3 py-2 text-right">{{ linha.u_g|floatformat:0 }}</td>
-                        <td class="border px-3 py-2 text-right">{{ linha.u_d|floatformat:2 }}</td>
+            <!-- Última -->
+            <td class="border px-3 py-2 text-right">{{ linha.u_g|floatformat:0 }}</td>
+            <td class="border px-3 py-2 text-right">{{ linha.u_d|floatformat:2 }}</td>
 
-                        <!-- Diferenças -->
-                        <td class="border px-3 py-2 text-right">
-                            {% if linha.diff_g is not None %}{{ linha.diff_g|floatformat:0 }}{% else %}—{% endif %}
-                        </td>
-                        <td class="border px-3 py-2 text-right">
-                            {% if linha.diff_d is not None %}{{ linha.diff_d|floatformat:2 }}{% else %}—{% endif %}
-                        </td>
-                        <td class="border px-3 py-2 text-right">
-                            {% if linha.diff_d is not None %}{{ linha.diff_d|floatval|mul:50|floatformat:2 }}{% else %}—{% endif %}
-                        </td>
+            <!-- Diferenças -->
+            <td class="border px-3 py-2 text-right">
+              {% if linha.diff_g is not None %}{{ linha.diff_g|floatformat:0 }}{% else %}—{% endif %}
+            </td>
+            <td class="border px-3 py-2 text-right">
+              {% if linha.diff_d is not None %}{{ linha.diff_d|floatformat:2 }}{% else %}—{% endif %}
+            </td>
+            <td class="border px-3 py-2 text-right">
+              {% if linha.diff_d is not None %}{{ linha.diff_d|floatval|mul:50|floatformat:2 }}{% else %}—{% endif %}
+            </td>
 
-                        <!-- Datas/Usuários na ordem penúltima → última -->
-                        <td class="border px-3 py-2">
-                            {% if linha.penultimo %}{{ linha.penultimo.data_contagem|date:"d/m/Y H:i" }}{% else %}—{% endif %}
-                        </td>
-                        <td class="border px-3 py-2">
-                            {% if linha.penultimo %}{{ linha.penultimo.usuario.username }}{% else %}—{% endif %}
-                        </td>
+            <!-- Datas/Usuários na ordem penúltima → última -->
+            <td class="border px-3 py-2">
+              {% if linha.penultimo %}{{ linha.penultimo.data_contagem|date:"d/m/Y H:i" }}{% else %}—{% endif %}
+            </td>
+            <td class="border px-3 py-2">
+              {% if linha.penultimo %}{{ linha.penultimo.usuario.username }}{% else %}—{% endif %}
+            </td>
 
-                        <td class="border px-3 py-2">{{ linha.ultimo.data_contagem|date:"d/m/Y H:i" }}</td>
-                        <td class="border px-3 py-2">{{ linha.ultimo.usuario.username }}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% endfor %}
+            <td class="border px-3 py-2">{{ linha.ultimo.data_contagem|date:"d/m/Y H:i" }}</td>
+            <td class="border px-3 py-2">{{ linha.ultimo.usuario.username }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
 {% else %}
-    <p class="text-gray-600 mt-4">Nenhuma contagem registrada.</p>
+  <p class="text-gray-600 mt-4">Nenhuma contagem registrada.</p>
 {% endif %}
 {% endblock %}

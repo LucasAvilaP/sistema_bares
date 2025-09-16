@@ -2178,19 +2178,23 @@ def relatorio_diferenca_contagens(request):
     bar_atual = get_object_or_404(Bar, id=bar_id)
     restaurante = bar_atual.restaurante
 
-    # Todos os bares do restaurante (igual aos outros relatórios)
     bares = Bar.objects.filter(restaurante=restaurante).order_by('nome')
 
-    # Estruturas de saída
-    dados_por_bar = {}  # { "Nome do Bar": [ {produto, ultimo, penultimo, diffs...}, ...] }
+    # Consolidado por produto (restaurante inteiro)
     somatorio_total = defaultdict(lambda: {
         'produto': None,
         'diff_garrafas': Decimal('0'),
         'diff_doses': Decimal('0'),
+        # NOVOS CAMPOS:
+        'entradas_g': Decimal('0'),
+        'periodo_ini': None,   # menor data da PENÚLTIMA contagem do produto
+        'periodo_fim': None,   # maior data da ÚLTIMA contagem do produto
     })
 
+    # Por bar (para manter a tabela detalhada que você já tem)
+    dados_por_bar = {}
+
     for bar in bares:
-        # Pega contagens do bar, mais novas primeiro
         contagens = (
             ContagemBar.objects
             .filter(bar=bar)
@@ -2198,17 +2202,14 @@ def relatorio_diferenca_contagens(request):
             .order_by('-data_contagem')
         )
 
-        # Para cada produto do bar, vamos guardar as DUAS mais recentes
-        # Estrutura: { produto_id: [ultima, penultima] }
+        # para cada produto, guardamos as 2 mais recentes
         duas_ultimas_por_produto = {}
-
         for c in contagens:
             pid = c.produto_id
             if pid not in duas_ultimas_por_produto:
-                duas_ultimas_por_produto[pid] = [c]  # primeira (última)
+                duas_ultimas_por_produto[pid] = [c]        # última
             elif len(duas_ultimas_por_produto[pid]) == 1:
-                duas_ultimas_por_produto[pid].append(c)  # segunda (penúltima)
-            # se já tem 2, ignora
+                duas_ultimas_por_produto[pid].append(c)    # penúltima
 
         linhas_bar = []
 
@@ -2216,7 +2217,6 @@ def relatorio_diferenca_contagens(request):
             ultimo = lista[0]
             penultimo = lista[1] if len(lista) > 1 else None
 
-            # Converte doses para Decimal pra evitar bug de float
             u_g = Decimal(ultimo.quantidade_garrafas_cheias or 0)
             u_d = Decimal(ultimo.quantidade_doses_restantes or 0)
 
@@ -2226,33 +2226,64 @@ def relatorio_diferenca_contagens(request):
 
                 diff_g = u_g - p_g
                 diff_d = u_d - p_d
+
+                # Alimenta o consolidado do restaurante
+                st = somatorio_total[pid]
+                st['produto'] = ultimo.produto
+                st['diff_garrafas'] += diff_g
+                st['diff_doses'] += diff_d
+
+                # Atualiza o intervalo do produto no consolidado
+                pen_dt = penultimo.data_contagem
+                ult_dt = ultimo.data_contagem
+
+                if (st['periodo_ini'] is None) or (pen_dt < st['periodo_ini']):
+                    st['periodo_ini'] = pen_dt
+                if (st['periodo_fim'] is None) or (ult_dt > st['periodo_fim']):
+                    st['periodo_fim'] = ult_dt
+
             else:
                 diff_g = None
                 diff_d = None
-
-            # Alimenta o somatório consolidado (só se tiver penúltima)
-            if diff_g is not None and diff_d is not None:
-                somatorio_total[pid]['produto'] = ultimo.produto
-                somatorio_total[pid]['diff_garrafas'] += diff_g
-                somatorio_total[pid]['diff_doses'] += diff_d
+                p_g = p_d = None
 
             linhas_bar.append({
                 'produto': ultimo.produto,
                 'ultimo': ultimo,
                 'penultimo': penultimo,
                 'u_g': u_g, 'u_d': u_d,
-                'p_g': (p_g if penultimo else None),
-                'p_d': (p_d if penultimo else None),
+                'p_g': p_g, 'p_d': p_d,
                 'diff_g': diff_g,
                 'diff_d': diff_d,
             })
 
-        # Ordena por nome do produto dentro do bar (fica mais amigável)
         linhas_bar.sort(key=lambda x: x['produto'].nome.lower())
-
         dados_por_bar[bar.nome] = linhas_bar
 
-    # Ordena somatório total por nome do produto
+    # === Após varrer todos os bares, calculamos ENTRADAS por produto ===
+    # Entradas somam o que chegou ao restaurante (estoque central) no intervalo [periodo_ini, periodo_fim]
+    for pid, st in list(somatorio_total.items()):
+        ini = st['periodo_ini']
+        fim = st['periodo_fim']
+        if ini and fim:
+            # Garantimos timezone-aware
+            ini_aw = timezone.make_aware(ini) if timezone.is_naive(ini) else ini
+            fim_aw = timezone.make_aware(fim) if timezone.is_naive(fim) else fim
+
+            entradas = (
+                RecebimentoEstoque.objects
+                .filter(
+                    restaurante=restaurante,
+                    produto_id=pid,
+                    data_recebimento__gte=ini_aw,
+                    data_recebimento__lte=fim_aw
+                )
+                .aggregate(total=Sum('quantidade'))
+            )['total'] or Decimal('0')
+
+            st['entradas_g'] = entradas
+
+    # Ordena consolidado por nome do produto
     somatorio_total_dict = dict(sorted(
         somatorio_total.items(),
         key=lambda kv: kv[1]['produto'].nome.lower() if kv[1]['produto'] else ''
@@ -3404,11 +3435,15 @@ def exportar_diferenca_contagens_excel(request):
 
     # ===== Montagem dos dados (2 últimas por produto/bar) =====
     dados_por_bar = {}
-    # Agora vamos acumular também penúltima e última para o CONSOLIDADO
+    # Consolidado por produto (restaurante inteiro)
     somatorio_total = defaultdict(lambda: {
         'produto': None,
         'p_g': Decimal('0'), 'u_g': Decimal('0'),
         'p_d': Decimal('0'), 'u_d': Decimal('0'),
+        # NOVOS:
+        'periodo_ini': None,   # menor data da PENÚLTIMA contagem encontrada
+        'periodo_fim': None,   # maior data da ÚLTIMA contagem encontrada
+        'entradas_g': Decimal('0'),
     })
 
     for bar in bares:
@@ -3450,6 +3485,15 @@ def exportar_diferenca_contagens_excel(request):
             st['p_g'] += (p_g if p_g is not None else Decimal('0'))
             st['p_d'] += (p_d if p_d is not None else Decimal('0'))
 
+            # Atualiza janela (periodo_ini = menor penúltima; periodo_fim = maior última)
+            if penultimo:
+                pen_dt = penultimo.data_contagem
+                ult_dt = ultimo.data_contagem
+                if (st['periodo_ini'] is None) or (pen_dt < st['periodo_ini']):
+                    st['periodo_ini'] = pen_dt
+                if (st['periodo_fim'] is None) or (ult_dt > st['periodo_fim']):
+                    st['periodo_fim'] = ult_dt
+
             linhas_bar.append({
                 'bar': bar.nome,
                 'produto': ultimo.produto,
@@ -3465,7 +3509,28 @@ def exportar_diferenca_contagens_excel(request):
         linhas_bar.sort(key=lambda x: x['produto'].nome.lower())
         dados_por_bar[bar.nome] = linhas_bar
 
-    # Para o consolidado, a diferença é (Última - Penúltima) agregadas
+    # === Entradas por produto no intervalo [periodo_ini, periodo_fim] (restaurante inteiro) ===
+    for pid, st in list(somatorio_total.items()):
+        ini = st['periodo_ini']
+        fim = st['periodo_fim']
+        if ini and fim:
+            ini_aw = timezone.make_aware(ini) if timezone.is_naive(ini) else ini
+            fim_aw = timezone.make_aware(fim) if timezone.is_naive(fim) else fim
+
+            entradas = (
+                RecebimentoEstoque.objects
+                .filter(
+                    restaurante=restaurante,
+                    produto_id=pid,
+                    data_recebimento__gte=ini_aw,
+                    data_recebimento__lte=fim_aw,
+                )
+                .aggregate(total=Sum('quantidade'))
+            )['total'] or Decimal('0')
+
+            st['entradas_g'] = entradas
+
+    # Para o consolidado, ordena por nome do produto
     somatorio_total = dict(sorted(
         somatorio_total.items(),
         key=lambda kv: kv[1]['produto'].nome.lower() if kv[1]['produto'] else ''
@@ -3478,21 +3543,24 @@ def exportar_diferenca_contagens_excel(request):
     ws1 = wb.active
     ws1.title = "Consolidado"
 
-    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    # título e info
+    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
     titulo = ws1.cell(row=1, column=1, value=f"Diferenças (Penúltima x Última) — {restaurante.nome}")
     titulo.font = Font(bold=True, size=14)
     titulo.alignment = Alignment(horizontal="left", vertical="center")
 
     now = timezone.localtime(timezone.now())
-    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+    ws1.merge_cells(start_row=2, start_column=1, end_row=2, end_column=9)
     info = ws1.cell(row=2, column=1, value=f"Gerado em {now.strftime('%d/%m/%Y %H:%M')}")
     info.font = Font(italic=True, size=11)
 
     ws1.append([])
 
+    # Cabeçalhos (inclui ENTRADAS)
+    # 1:Produto | 2:Pen G | 3:Últ G | 4:Entradas G | 5:Diff G | 6:Pen D | 7:Últ D | 8:Diff D | 9:Diff Doses ML
     headers1 = [
         "Produto",
-        "Penúltima (Garrafas)", "Última (Garrafas)", "Diferença (Garrafas)",
+        "Penúltima (Garrafas)", "Última (Garrafas)", "Entradas (G)", "Diferença (Garrafas)",
         "Penúltima (Doses)",   "Última (Doses)",    "Diferença (Doses)",
         "Diferença (Doses ML)"
     ]
@@ -3504,33 +3572,39 @@ def exportar_diferenca_contagens_excel(request):
 
     for item in somatorio_total.values():
         prod = item['produto'].nome if item['produto'] else ""
-
-        p_g = item['p_g']; u_g = item['u_g']; diff_g = (u_g - p_g)
-        p_d = item['p_d']; u_d = item['u_d']; diff_d = (u_d - p_d)
+        p_g = item['p_g']; u_g = item['u_g']
+        p_d = item['p_d']; u_d = item['u_d']
+        entradas_g = item['entradas_g']
+        diff_g = (u_g - p_g)  # mantemos a lógica (Última - Penúltima)
+        diff_d = (u_d - p_d)
         diff_ml = diff_d * DOSE_ML
 
         ws1.cell(row=r, column=1, value=prod)
 
         c2 = ws1.cell(row=r, column=2, value=float(p_g))
         c3 = ws1.cell(row=r, column=3, value=float(u_g))
-        c4 = ws1.cell(row=r, column=4, value=float(diff_g))
+        c4 = ws1.cell(row=r, column=4, value=float(entradas_g))
+        c5 = ws1.cell(row=r, column=5, value=float(diff_g))
 
-        c5 = ws1.cell(row=r, column=5, value=float(p_d))
-        c6 = ws1.cell(row=r, column=6, value=float(u_d))
-        c7 = ws1.cell(row=r, column=7, value=float(diff_d))
-        c8 = ws1.cell(row=r, column=8, value=float(diff_ml))
+        c6 = ws1.cell(row=r, column=6, value=float(p_d))
+        c7 = ws1.cell(row=r, column=7, value=float(u_d))
+        c8 = ws1.cell(row=r, column=8, value=float(diff_d))
+        c9 = ws1.cell(row=r, column=9, value=float(diff_ml))
 
         # formatos
-        c2.number_format = "0"; c3.number_format = "0"; c4.number_format = "0"
-        c5.number_format = "0.00"; c6.number_format = "0.00"; c7.number_format = "0.00"; c8.number_format = "0.00"
+        for c in (c2, c3, c4, c5):
+            c.number_format = "0"
+        for c in (c6, c7, c8, c9):
+            c.number_format = "0.00"
+
         r += 1
 
     if r > first_data_row:
-        _apply_body_borders(ws1, first_data_row, r - 1, 1, 8)
+        _apply_body_borders(ws1, first_data_row, r - 1, 1, 9)
         ws1.freeze_panes = "A5"
 
-        # Escala de cores nas diferenças (Garrafas: col 4, Doses: col 7, Doses ML: col 8)
-        for col in [4, 7, 8]:
+        # Heatmap nas diferenças (Garrafas: col 5, Doses: col 8, Doses ML: col 9)
+        for col in [5, 8, 9]:
             col_letter = get_column_letter(col)
             ws1.conditional_formatting.add(
                 f"{col_letter}{first_data_row}:{col_letter}{r-1}",
@@ -3543,10 +3617,9 @@ def exportar_diferenca_contagens_excel(request):
 
     # larguras
     ws1.column_dimensions['A'].width = 36
-    for col in ['B','C','D','E','F','G','H']:
+    for col in ['B','C','D','E','F','G','H','I']:
         ws1.column_dimensions[col].width = 20
-
-    _auto_fit_columns(ws1)  # se preferir confiar no auto-fit que você já usa
+    _auto_fit_columns(ws1)
 
     # -------- Sheet 2: DETALHADO --------
     ws2 = wb.create_sheet(title="Detalhado")
