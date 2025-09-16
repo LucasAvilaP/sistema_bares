@@ -1889,8 +1889,6 @@ def relatorio_consolidado_view(request):
 
 SHIFT_START_HOUR = 19  # início do "dia operacional": 19:00
 
-SHIFT_START_HOUR = 19  # início do "dia operacional": 19:00
-
 @login_required
 def relatorio_contagem_atual(request):
     bar_id = request.session.get('bar_id')
