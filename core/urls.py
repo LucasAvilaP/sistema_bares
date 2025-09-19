@@ -56,6 +56,29 @@ urlpatterns = [
     path("relatorios/perdas/exportar/", views.exportar_relatorio_perdas_excel, name="exportar_relatorio_perdas_excel"),
     path('relatorios/perdas/marcar/<int:perda_id>/', views.marcar_perda_baixada, name='marcar_perda_baixada'),
     path('relatorios/perdas/desmarcar/<int:perda_id>/', views.desmarcar_perda_baixada, name='desmarcar_perda_baixada'),
+    path(
+        "relatorios/consolidado/periodo/",
+        views.relatorio_consolidado_periodo,
+        name="relatorio_consolidado_periodo",
+    ),
+    # Exportação Excel
+    path(
+        "relatorios/consolidado/periodo/exportar/",
+        views.exportar_consolidado_periodo_excel,
+        name="exportar_consolidado_periodo_excel",
+    ),
+    # (opcional) Consolidado atual
+    path(
+        "relatorios/consolidado/atual/",
+        views.consolidado_atual_view,
+        name="consolidado_atual",
+    ),
+    path(
+    "relatorios/consolidado/atual/exportar/",
+    views.exportar_consolidado_atual_excel,
+    name="exportar_consolidado_atual_excel",
+),
+    
 
 
     # Relatório específico de eventos (permanece)

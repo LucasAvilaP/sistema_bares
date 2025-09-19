@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% load static %}
+
+{% block content %}
+<style>
+  .wrap {max-width: 1000px; margin: 0 auto; padding: 12px;}
+  .card {background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px;}
+  .btn {display:inline-block; padding:8px 12px; border-radius:8px; border:1px solid #d1d5db; background:#f9fafb; cursor:pointer; text-decoration:none;}
+  .btn.primary {background:#111827; color:#fff; border-color:#111827;}
+  .table-wrap {overflow:auto; border:1px solid #e5e7eb; border-radius:10px;}
+  table {width:100%; border-collapse:collapse; font-size:14px;}
+  thead th {position:sticky; top:0; background:#f3f4f6; z-index:1; padding:10px; border-bottom:1px solid #e5e7eb; text-align:center;}
+  tbody td {padding:8px 10px; border-bottom:1px solid #f3f4f6;}
+  tbody tr:hover {background:#fafafa;}
+  .num {text-align:right; white-space:nowrap;}
+  .muted {color:#6b7280;}
+</style>
+
+<div class="wrap">
+  <h1 style="margin-bottom:4px;">Consolidado Atual</h1>
+  <p class="muted" style="margin-bottom:14px;">
+    Soma do estoque por produto em <strong>todos os bares (inclui o bar central)</strong>.
+  </p>
+
+  <div class="card" style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:12px;">
+    <a class="btn" href="{% url 'exportar_consolidado_atual_excel' %}">⬇️ Exportar Excel</a>
+  </div>
+
+  <div class="table-wrap card" style="padding:0;">
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left;">Produto</th>
+          <th>Total (G)</th>
+          <th>Total (D)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in linhas %}
+          <tr>
+            <td>{{ l.produto.nome }}</td>
+            <td class="num">{{ l.g|floatformat:0 }}</td>
+            <td class="num">{{ l.d|floatformat:2 }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="3" class="muted" style="text-align:center; padding:16px;">
+              Nenhum dado encontrado.
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="muted" style="margin-top:10px;">
+    Este painel usa o <strong>EstoqueBar</strong> (sincronizado pelas contagens e movimentações) como fonte de verdade.
+  </p>
+</div>
+{% endblock %}

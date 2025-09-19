@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% load static %}
+
+{% block content %}
+<style>
+  .wrap {max-width: 1200px; margin: 0 auto; padding: 12px;}
+  .card {background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:14px;}
+  .subhead {font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:.04em;}
+
+  /* -------- Filtros -------- */
+  .filters-grid{
+    display:grid;
+    grid-template-columns: repeat(4, minmax(150px, 1fr)) minmax(260px, 1fr) auto;
+    gap:12px;
+    align-items:end;
+  }
+  .field{display:flex; flex-direction:column; gap:6px;}
+  .checkbox-field label.inline{display:flex; gap:8px; align-items:center; margin-top:4px;}
+  .btn{display:inline-block; padding:8px 12px; border-radius:8px; border:1px solid #d1d5db; background:#f9fafb; cursor:pointer; text-decoration:none;}
+  .btn.primary{background:#111827; color:#fff; border-color:#111827;}
+  .actions{display:flex; gap:8px; justify-content:flex-end; align-items:center;}
+
+  /* Responsivo */
+  @media (max-width: 1000px){
+    .filters-grid{
+      grid-template-columns: repeat(2, minmax(160px, 1fr));
+    }
+    .checkbox-field{grid-column: 1 / -1;}
+    .actions{grid-column: 1 / -1; justify-content:flex-start;}
+  }
+
+  /* -------- Tabela -------- */
+  .table-wrap{overflow:auto; border:1px solid #e5e7eb; border-radius:12px;}
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  thead th{position:sticky; top:0; background:#f3f4f6; z-index:1; padding:10px; border-bottom:1px solid #e5e7eb; text-align:center;}
+  tbody td, tfoot td{padding:8px 10px; border-bottom:1px solid #f3f4f6;}
+  tbody tr:hover{background:#fafafa;}
+  .num{text-align:right; white-space:nowrap;}
+  .muted{color:#6b7280;}
+</style>
+
+<div class="wrap">
+  <h1 style="margin-bottom:4px;">Consolidado do Período</h1>
+  <div class="muted" style="margin-bottom:14px;">
+    Restaurante: <strong>{{ restaurante.nome }}</strong>
+  </div>
+
+  <form method="get" class="card">
+    <div class="filters-grid">
+      <div class="field">
+        <label class="subhead">Início (data)</label>
+        <input type="date" name="inicio" value="{{ inicio|date:'Y-m-d' }}" class="btn" style="padding:6px 10px;">
+      </div>
+      <div class="field">
+        <label class="subhead">Início (hora)</label>
+        <input type="time" name="inicio_hora" value="{{ inicio_hora|default:'00:00' }}" class="btn" style="padding:6px 10px;">
+      </div>
+      <div class="field">
+        <label class="subhead">Fim (data)</label>
+        <input type="date" name="fim" value="{{ fim|date:'Y-m-d' }}" class="btn" style="padding:6px 10px;">
+      </div>
+      <div class="field">
+        <label class="subhead">Fim (hora)</label>
+        <input type="time" name="fim_hora" value="{{ fim_hora|default:'23:59' }}" class="btn" style="padding:6px 10px;">
+      </div>
+      <div class="field checkbox-field">
+        <label class="subhead">Incluir estoque central</label>
+        <label class="inline">
+          <input type="checkbox" name="incluir_central" value="1" {% if incluir_central == '1' %}checked{% endif %}>
+          <span class="muted">Somar central no Início/Final</span>
+        </label>
+      </div>
+      <div class="actions">
+        <button class="btn primary" type="submit">Aplicar</button>
+        <a class="btn" href="?">Limpar</a>
+        <a class="btn" style="padding: 6px 6px;"
+           href="{% url 'exportar_consolidado_periodo_excel' %}?inicio={{ inicio|date:'Y-m-d' }}&inicio_hora={{ inicio_hora|default:'00:00' }}&fim={{ fim|date:'Y-m-d' }}&fim_hora={{ fim_hora|default:'23:59' }}&incluir_central={{ incluir_central }}">
+           ⬇️ Exportar Excel
+        </a>
+      </div>
+    </div>
+  </form>
+
+  <div class="table-wrap card" style="padding:0; margin-top:12px;">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2" style="text-align:left;">Produto</th>
+          <th colspan="2">Início</th>
+          <th colspan="2">Entradas</th>
+          <th colspan="2">Final</th>
+          <th colspan="2">Saída</th>
+        </tr>
+        <tr>
+          <th>G</th><th>D</th>
+          <th>G</th><th>D</th>
+          <th>G</th><th>D</th>
+          <th>G</th><th>D</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in linhas %}
+          <tr>
+            <td>{{ l.produto.nome }}</td>
+            <td class="num">{{ l.inicio_g|floatformat:0 }}</td>
+            <td class="num">{{ l.inicio_d|floatformat:2 }}</td>
+            <td class="num">{{ l.entradas_g|floatformat:0 }}</td>
+            <td class="num">{{ l.entradas_d|floatformat:2 }}</td>
+            <td class="num">{{ l.final_g|floatformat:0 }}</td>
+            <td class="num">{{ l.final_d|floatformat:2 }}</td>
+            <td class="num">{{ l.saida_g|floatformat:0 }}</td>
+            <td class="num">{{ l.saida_d|floatformat:2 }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="9" class="muted" style="text-align:center; padding:16px;">
+              Nenhum dado para o intervalo selecionado.
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+
+      {% if linhas %}
+      <tfoot>
+        <tr>
+          <td style="text-align:right;"><strong>Total</strong></td>
+          <td class="num"><strong>{{ totais.inicio_g|floatformat:0 }}</strong></td>
+          <td class="num"><strong>{{ totais.inicio_d|floatformat:2 }}</strong></td>
+          <td class="num"><strong>{{ totais.entradas_g|floatformat:0 }}</strong></td>
+          <td class="num"><strong>{{ totais.entradas_d|floatformat:2 }}</strong></td>
+          <td class="num"><strong>{{ totais.final_g|floatformat:0 }}</strong></td>
+          <td class="num"><strong>{{ totais.final_d|floatformat:2 }}</strong></td>
+          <td class="num"><strong>{{ totais.saida_g|floatformat:0 }}</strong></td>
+          <td class="num"><strong>{{ totais.saida_d|floatformat:2 }}</strong></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+
+  <p class="muted" style="margin-top:10px;">
+    <strong>Saída</strong> = Início + Entradas – Final. Você pode selecionar intervalos que cruzam a meia-noite (ex.: 18:00 → 03:00).
+  </p>
+</div>
+{% endblock %}

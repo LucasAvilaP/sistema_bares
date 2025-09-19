@@ -5,6 +5,37 @@
     <h2 class="mb-4">📑 Relatórios do Sistema</h2>
 
     <div class="row row-cols-1 row-cols-md-2 g-4">
+
+        <!-- NOVO: Consolidado do Período (Início/Entradas/Final/Saída) -->
+        <div class="col">
+            <div class="card h-100 border-secondary shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">🧮 Consolidado do Período</h5>
+                    <p class="card-text">
+                        Soma por produto em todos os bares: <strong>Início</strong> + <strong>Entradas</strong> (recebimento no central) – <strong>Final</strong> = <strong>Saída</strong>.
+                        Permite filtrar datas e incluir/excluir o estoque central.
+                    </p>
+                    <a href="{% url 'relatorio_consolidado_periodo' %}" class="btn btn-secondary" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'exportar_consolidado_periodo_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- NOVO: Consolidado Atual (snapshot usando EstoqueBar) -->
+        <div class="col">
+            <div class="card h-100 border-dark shadow-sm">
+                <div class="card-body">
+                    <h5 class="card-title">📌 Consolidado Atual</h5>
+                    <p class="card-text">
+                        Snapshot do estoque atual (garrafas e doses) somado por produto em todos os bares. Pode incluir/excluir o bar central.
+                    </p>
+                    <a href="{% url 'consolidado_atual' %}" class="btn btn-dark" data-ctx="1">Acessar Relatório</a>
+                    <a href="{% url 'exportar_consolidado_atual_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Saídas de Estoque para os Bares -->
         <div class="col">
             <div class="card h-100 border-primary shadow-sm">
                 <div class="card-body">
@@ -16,6 +47,7 @@
             </div>
         </div>
 
+        <!-- Contagem Final x Saída x Diferença (legado/seu relatório anterior) -->
         <div class="col">
             <div class="card h-100 border-success shadow-sm">
                 <div class="card-body">
@@ -27,6 +59,7 @@
             </div>
         </div>
 
+        <!-- Contagem dos Bares -->
         <div class="col">
             <div class="card h-100 border-info shadow-sm">
                 <div class="card-body">
@@ -38,6 +71,7 @@
             </div>
         </div>
 
+        <!-- Relatório de Eventos -->
         <div class="col">
             <div class="card h-100 border-warning shadow-sm">
                 <div class="card-body">
@@ -63,7 +97,7 @@
             </div>
         </div>
 
-        <!-- NOVO: Relatório de Perdas -->
+        <!-- Relatório de Perdas -->
         <div class="col">
             <div class="card h-100 border-dark shadow-sm">
                 <div class="card-body">
@@ -71,10 +105,10 @@
                     <p class="card-text">Analise perdas por bar, período, produto (nome/código) e motivo. Inclui consolidados e detalhamento.</p>
                     <a href="{% url 'relatorio_perdas' %}" class="btn btn-dark" data-ctx="1">Acessar Relatório</a>
                     <a href="{% url 'exportar_relatorio_perdas_excel' %}" class="btn btn-outline-danger ms-2" data-ctx="1">⬇️ Exportar Excel</a>
-                    
                 </div>
             </div>
         </div>
+
     </div>
 </div>
 {% endblock %}
