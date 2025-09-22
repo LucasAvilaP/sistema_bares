@@ -2385,62 +2385,48 @@ def relatorio_perdas(request):
 
 
 
-# === HELPERS ===
+#from collections import defaultdict
+from decimal import Decimal
+from datetime import datetime, time, timedelta
+
+from django.db.models import Sum
+from django.utils import timezone
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.shortcuts import render, get_object_or_404, redirect
+
+# helpers que você já tem
 def _parse_date(s, default_date):
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except Exception:
-        return default_date
+    try: return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception: return default_date
 
 def _parse_time(s, default_time):
-    try:
-        return datetime.strptime(s, "%H:%M").time()
-    except Exception:
-        return default_time
+    try: return datetime.strptime(s, "%H:%M").time()
+    except Exception: return default_time
 
-def _aware(dt):
+def _aware(dt):  # garante timezone-aware
     return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
 
 def interval_from_request(request):
-    """
-    Lê inicio/fim (datas) e inicio_hora/fim_hora do GET.
-    Se fim <= início, assume que o fim é no dia seguinte (cruza meia-noite).
-    Retorna (ini_date, fim_date, ini_time, fim_time, start_dt, end_dt).
-    """
     hoje = timezone.localdate()
     inicio_str = request.GET.get('inicio') or str(hoje)
     fim_str    = request.GET.get('fim')    or str(hoje)
+    h_ini = request.GET.get('inicio_hora') or "00:00"
+    h_fim = request.GET.get('fim_hora')    or "23:59"
 
-    # defaults: 00:00 → 23:59
-    inicio_hora_str = request.GET.get('inicio_hora') or "00:00"
-    fim_hora_str    = request.GET.get('fim_hora')    or "23:59"
+    d_ini = _parse_date(inicio_str, hoje)
+    d_fim = _parse_date(fim_str, hoje)
+    t_ini = _parse_time(h_ini, time(0,0))
+    t_fim = _parse_time(h_fim, time(23,59))
 
-    ini_date = _parse_date(inicio_str, hoje)
-    fim_date = _parse_date(fim_str, hoje)
-    ini_time = _parse_time(inicio_hora_str, time(0, 0))
-    fim_time = _parse_time(fim_hora_str, time(23, 59))
+    ini_dt = _aware(datetime.combine(d_ini, t_ini))
+    fim_dt = _aware(datetime.combine(d_fim, t_fim))
+    if fim_dt <= ini_dt:  # cruza a meia-noite
+        fim_dt += timedelta(days=1)
+    return d_ini, d_fim, t_ini, t_fim, ini_dt, fim_dt
 
-    start_dt = _aware(datetime.combine(ini_date, ini_time))
-    end_dt   = _aware(datetime.combine(fim_date, fim_time))
-
-    # cruza a meia-noite: 18:00 → 03:00 (end <= start) → soma 1 dia ao fim
-    if end_dt <= start_dt:
-        end_dt += timedelta(days=1)
-
-    return ini_date, fim_date, ini_time, fim_time, start_dt, end_dt
-
-def ultima_contagem_ate(produto, bar, limite_dt):
-    return (
-        ContagemBar.objects
-        .filter(produto=produto, bar=bar, data_contagem__lte=limite_dt)
-        .order_by('-data_contagem')
-        .first()
-    )
-
-# === VIEW PRINCIPAL ===
 @login_required
 def relatorio_consolidado_periodo(request):
-    # Permissão
     if not PermissaoPagina.objects.filter(user=request.user, nome_pagina='relatorios').exists():
         messages.error(request, "Você não tem permissão para acessar a página de relatórios.")
         return redirect('dashboard')
@@ -2451,32 +2437,52 @@ def relatorio_consolidado_periodo(request):
         return redirect('dashboard')
 
     restaurante = get_object_or_404(Restaurante, id=restaurante_id)
-    bares = list(Bar.objects.filter(restaurante=restaurante).order_by('nome'))
     incluir_central = (request.GET.get('incluir_central', '1') == '1')
 
-    # Período com horas (intervalo arbitrário)
-    ini_date, fim_date, ini_time, fim_time, ini_dt, fim_dt = interval_from_request(request)
+    d_ini, d_fim, t_ini, t_fim, ini_dt, fim_dt = interval_from_request(request)
 
-    # Bar central
+    # bares/produtos
+    bares_qs = Bar.objects.filter(restaurante=restaurante).order_by('nome')
+    if not incluir_central:
+        bares_qs = bares_qs.filter(is_estoque_central=False)
+    bares = list(bares_qs)
+    bar_ids = [b.id for b in bares]
+
+    produtos = list(Produto.objects.filter(ativo=True).order_by('nome'))
+    prod_ids = [p.id for p in produtos]
+
+    # --------- FUNÇÕES AUXILIARES (sem window) ----------
+    def latest_map_until(limit_dt):
+        """
+        Retorna dict {(bar_id, produto_id): (g, d)} com a ÚLTIMA contagem <= limit_dt,
+        em UMA query grande, ordenada por (bar, produto, -data).
+        """
+        qs = (ContagemBar.objects
+              .filter(bar_id__in=bar_ids, produto_id__in=prod_ids, data_contagem__lte=limit_dt)
+              .order_by('bar_id', 'produto_id', '-data_contagem')
+              .values('bar_id', 'produto_id', 'quantidade_garrafas_cheias', 'quantidade_doses_restantes'))
+        out = {}
+        for r in qs:
+            key = (r['bar_id'], r['produto_id'])
+            if key not in out:  # pega só a primeira (que é a mais recente por chave)
+                out[key] = (Decimal(r['quantidade_garrafas_cheias']), r['quantidade_doses_restantes'])
+        return out
+
+    ini_map = latest_map_until(ini_dt)
+    fim_map = latest_map_until(fim_dt)
+
+    # Entradas (sempre no bar central)
+    entradas = defaultdict(lambda: {'g': Decimal('0'), 'd': Decimal('0')})
     bar_central = Bar.objects.filter(restaurante=restaurante, is_estoque_central=True).first()
-
-    # Produtos ativos
-    produtos = Produto.objects.filter(ativo=True).order_by('nome')
-
-    # Entradas (RecebimentoEstoque) no intervalo — somente bar central
-    entradas_por_prod = defaultdict(lambda: {'g': Decimal('0'), 'd': Decimal('0')})
     if bar_central:
-        recs = (
-            RecebimentoEstoque.objects
-            .filter(restaurante=restaurante, bar=bar_central,
-                    data_recebimento__gte=ini_dt, data_recebimento__lte=fim_dt)
-            .values('produto')
-            .annotate(qtd=Sum('quantidade'))
-        )
+        recs = (RecebimentoEstoque.objects
+                .filter(restaurante=restaurante, bar=bar_central,
+                        data_recebimento__gte=ini_dt, data_recebimento__lte=fim_dt)
+                .values('produto')
+                .annotate(qtd=Sum('quantidade')))
         for r in recs:
-            entradas_por_prod[r['produto']]['g'] += r['qtd'] or Decimal('0')
+            entradas[r['produto']]['g'] += r['qtd'] or Decimal('0')
 
-    # Consolidado Início / Final (somando bares)
     linhas = []
     totais = defaultdict(lambda: {
         'inicio_g': Decimal('0'), 'inicio_d': Decimal('0'),
@@ -2485,67 +2491,45 @@ def relatorio_consolidado_periodo(request):
         'saida_g': Decimal('0'), 'saida_d': Decimal('0'),
     })
 
-    for produto in produtos:
+    for p in produtos:
         inicio_g = inicio_d = Decimal('0')
         final_g  = final_d  = Decimal('0')
-        pior_defasagem = 0  # em dias
 
-        for bar in bares:
-            if not incluir_central and getattr(bar, 'is_estoque_central', False):
-                continue
+        for b in bares:
+            if (b.id, p.id) in ini_map:
+                g, d = ini_map[(b.id, p.id)]
+                inicio_g += g; inicio_d += d
+            if (b.id, p.id) in fim_map:
+                g, d = fim_map[(b.id, p.id)]
+                final_g  += g; final_d  += d
 
-            # Início: última contagem ATÉ o início do intervalo
-            cont_ini = ultima_contagem_ate(produto, bar, ini_dt)
-            # Final: última contagem ATÉ o fim do intervalo
-            cont_fin = ultima_contagem_ate(produto, bar, fim_dt)
-
-            if cont_ini:
-                inicio_g += Decimal(cont_ini.quantidade_garrafas_cheias)
-                inicio_d += cont_ini.quantidade_doses_restantes
-
-            if cont_fin:
-                final_g += Decimal(cont_fin.quantidade_garrafas_cheias)
-                final_d += cont_fin.quantidade_doses_restantes
-                diff_days = (fim_dt.date() - cont_fin.data_contagem.date()).days
-                if diff_days > pior_defasagem:
-                    pior_defasagem = diff_days
-
-        ent_g = entradas_por_prod[produto.id]['g']
-        ent_d = entradas_por_prod[produto.id]['d']  # geralmente 0
-
+        ent_g = entradas[p.id]['g']; ent_d = entradas[p.id]['d']  # doses geralmente 0
         saida_g = (inicio_g + ent_g) - final_g
         saida_d = (inicio_d + ent_d) - final_d
 
         linhas.append({
-            'produto': produto,
+            'produto': p,
             'inicio_g': inicio_g, 'inicio_d': inicio_d,
             'entradas_g': ent_g,  'entradas_d': ent_d,
             'final_g': final_g,   'final_d': final_d,
             'saida_g': saida_g,   'saida_d': saida_d,
-            'defasagem_max_dias': pior_defasagem,
         })
 
-        t = totais['geral']
-        t['inicio_g']   += inicio_g
-        t['inicio_d']   += inicio_d
-        t['entradas_g'] += ent_g
-        t['entradas_d'] += ent_d
-        t['final_g']    += final_g
-        t['final_d']    += final_d
-        t['saida_g']    += saida_g
-        t['saida_d']    += saida_d
+        T = totais['geral']
+        T['inicio_g'] += inicio_g; T['inicio_d'] += inicio_d
+        T['entradas_g'] += ent_g;  T['entradas_d'] += ent_d
+        T['final_g'] += final_g;   T['final_d']   += final_d
+        T['saida_g'] += saida_g;   T['saida_d']   += saida_d
 
-    contexto = {
+    return render(request, 'core/relatorios/consolidado_periodo.html', {
         'restaurante': restaurante,
         'linhas': linhas,
         'totais': totais['geral'],
-        'inicio': ini_date,
-        'fim': fim_date,
-        'inicio_hora': ini_time.strftime("%H:%M"),
-        'fim_hora': fim_time.strftime("%H:%M"),
+        'inicio': d_ini, 'fim': d_fim,
+        'inicio_hora': t_ini.strftime("%H:%M"), 'fim_hora': t_fim.strftime("%H:%M"),
         'incluir_central': '1' if incluir_central else '0',
-    }
-    return render(request, 'core/relatorios/consolidado_periodo.html', contexto)
+    })
+
 
 
 
@@ -2670,16 +2654,46 @@ def exportar_consolidado_periodo_excel(request):
     restaurante = get_object_or_404(Restaurante, id=restaurante_id)
     incluir_central = (request.GET.get('incluir_central', '1') == '1')
 
-    # Intervalo com horas
+    # Intervalo com horas (mesmo da página)
     ini_date, fim_date, ini_time, fim_time, ini_dt, fim_dt = interval_from_request(request)
 
-    # Base
-    bares = list(Bar.objects.filter(restaurante=restaurante).order_by('nome'))
-    bar_central = Bar.objects.filter(restaurante=restaurante, is_estoque_central=True).first()
-    produtos = Produto.objects.filter(ativo=True).order_by('nome')
+    # Bares e produtos
+    bares_qs = Bar.objects.filter(restaurante=restaurante).order_by('nome')
+    if not incluir_central:
+        bares_qs = bares_qs.filter(is_estoque_central=False)
+    bares = list(bares_qs)
+    bar_ids = [b.id for b in bares]
 
-    # Entradas no período (só no bar central)
+    produtos = list(Produto.objects.filter(ativo=True).order_by('nome'))
+    prod_ids = [p.id for p in produtos]
+
+    # --------- Auxiliar sem window function ----------
+    def latest_map_until(limit_dt):
+        """
+        Uma query só: pega contagens <= limit_dt, ordena por (bar, produto, -data),
+        e guarda a primeira por chave em memória.
+        """
+        qs = (
+            ContagemBar.objects
+            .filter(bar_id__in=bar_ids, produto_id__in=prod_ids, data_contagem__lte=limit_dt)
+            .order_by('bar_id', 'produto_id', '-data_contagem')
+            .values('bar_id', 'produto_id',
+                    'quantidade_garrafas_cheias', 'quantidade_doses_restantes')
+        )
+        out = {}
+        for r in qs:
+            key = (r['bar_id'], r['produto_id'])
+            if key not in out:
+                out[key] = (Decimal(r['quantidade_garrafas_cheias']),
+                            r['quantidade_doses_restantes'])
+        return out
+
+    ini_map = latest_map_until(ini_dt)
+    fim_map = latest_map_until(fim_dt)
+
+    # Entradas (sempre no central) em uma query
     entradas_por_prod = defaultdict(lambda: {'g': Decimal('0'), 'd': Decimal('0')})
+    bar_central = Bar.objects.filter(restaurante=restaurante, is_estoque_central=True).first()
     if bar_central:
         recs = (
             RecebimentoEstoque.objects
@@ -2691,7 +2705,7 @@ def exportar_consolidado_periodo_excel(request):
         for r in recs:
             entradas_por_prod[r['produto']]['g'] += r['qtd'] or Decimal('0')
 
-    # Linhas + totais
+    # Montagem das linhas + totais
     linhas = []
     totais = defaultdict(lambda: {
         'inicio_g': Decimal('0'), 'inicio_d': Decimal('0'),
@@ -2700,48 +2714,38 @@ def exportar_consolidado_periodo_excel(request):
         'saida_g': Decimal('0'), 'saida_d': Decimal('0'),
     })
 
-    for produto in produtos:
+    for p in produtos:
         inicio_g = inicio_d = Decimal('0')
         final_g  = final_d  = Decimal('0')
 
-        for bar in bares:
-            if not incluir_central and getattr(bar, 'is_estoque_central', False):
-                continue
+        for b in bares:
+            k = (b.id, p.id)
+            if k in ini_map:
+                g, d = ini_map[k]
+                inicio_g += g; inicio_d += d
+            if k in fim_map:
+                g, d = fim_map[k]
+                final_g  += g; final_d  += d
 
-            cont_ini = ultima_contagem_ate(produto, bar, ini_dt)
-            cont_fin = ultima_contagem_ate(produto, bar, fim_dt)
-
-            if cont_ini:
-                inicio_g += Decimal(cont_ini.quantidade_garrafas_cheias)
-                inicio_d += cont_ini.quantidade_doses_restantes
-
-            if cont_fin:
-                final_g += Decimal(cont_fin.quantidade_garrafas_cheias)
-                final_d += cont_fin.quantidade_doses_restantes
-
-        ent_g = entradas_por_prod[produto.id]['g']
-        ent_d = entradas_por_prod[produto.id]['d']  # geralmente 0
+        ent_g = entradas_por_prod[p.id]['g']
+        ent_d = entradas_por_prod[p.id]['d']  # normalmente 0
 
         saida_g = (inicio_g + ent_g) - final_g
         saida_d = (inicio_d + ent_d) - final_d
 
         linhas.append({
-            'produto': produto.nome,
+            'produto': p.nome,
             'inicio_g': inicio_g, 'inicio_d': inicio_d,
             'entradas_g': ent_g,  'entradas_d': ent_d,
             'final_g': final_g,   'final_d': final_d,
             'saida_g': saida_g,   'saida_d': saida_d,
         })
 
-        t = totais['geral']
-        t['inicio_g']   += inicio_g
-        t['inicio_d']   += inicio_d
-        t['entradas_g'] += ent_g
-        t['entradas_d'] += ent_d
-        t['final_g']    += final_g
-        t['final_d']    += final_d
-        t['saida_g']    += saida_g
-        t['saida_d']    += saida_d
+        T = totais['geral']
+        T['inicio_g']   += inicio_g; T['inicio_d']   += inicio_d
+        T['entradas_g'] += ent_g;    T['entradas_d'] += ent_d
+        T['final_g']    += final_g;  T['final_d']    += final_d
+        T['saida_g']    += saida_g;  T['saida_d']    += saida_d
 
     # ====== Excel ======
     wb = Workbook()
@@ -2752,7 +2756,7 @@ def exportar_consolidado_periodo_excel(request):
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     center = Alignment(horizontal="center", vertical="center")
-    right = Alignment(horizontal="right", vertical="center")
+    right  = Alignment(horizontal="right",  vertical="center")
 
     # Título
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
@@ -2767,11 +2771,9 @@ def exportar_consolidado_periodo_excel(request):
     )
     ws.cell(row=2, column=1).font = Font(size=11)
 
-    # Cabeçalhos (sem Defasagem)
-    headers_top = ["Produto", "Início", "", "Entradas", "", "Final", "", "Saída", ""]
-    headers_sub = ["", "G", "D", "G", "D", "G", "D", "G", "D"]
-    ws.append(headers_top)
-    ws.append(headers_sub)
+    # Cabeçalhos
+    ws.append(["Produto", "Início", "", "Entradas", "", "Final", "", "Saída", ""])
+    ws.append(["",        "G", "D",   "G", "D",       "G", "D",   "G",   "D"])
 
     ws.merge_cells(start_row=3, start_column=1, end_row=4, end_column=1)  # Produto
     ws.merge_cells(start_row=3, start_column=2, end_row=3, end_column=3)  # Início
@@ -2780,7 +2782,7 @@ def exportar_consolidado_periodo_excel(request):
     ws.merge_cells(start_row=3, start_column=8, end_row=3, end_column=9)  # Saída
 
     for r in (3, 4):
-        for c in range(1, 9 + 1):
+        for c in range(1, 10):
             cell = ws.cell(row=r, column=c)
             cell.fill = head_fill
             cell.font = Font(bold=True)
@@ -2790,47 +2792,42 @@ def exportar_consolidado_periodo_excel(request):
     # Dados
     row = 5
     for l in linhas:
-        ws.cell(row=row, column=1,  value=l['produto']).alignment = Alignment(vertical="center")
-        ws.cell(row=row, column=2,  value=float(l['inicio_g'])).alignment = right
-        ws.cell(row=row, column=3,  value=float(l['inicio_d'])).alignment = right
-        ws.cell(row=row, column=4,  value=float(l['entradas_g'])).alignment = right
-        ws.cell(row=row, column=5,  value=float(l['entradas_d'])).alignment = right
-        ws.cell(row=row, column=6,  value=float(l['final_g'])).alignment = right
-        ws.cell(row=row, column=7,  value=float(l['final_d'])).alignment = right
-        ws.cell(row=row, column=8,  value=float(l['saida_g'])).alignment = right
-        ws.cell(row=row, column=9,  value=float(l['saida_d'])).alignment = right
-
-        for c in range(1, 9 + 1):
+        ws.cell(row=row, column=1, value=l['produto']).alignment = Alignment(vertical="center")
+        ws.cell(row=row, column=2, value=float(l['inicio_g'])).alignment  = right
+        ws.cell(row=row, column=3, value=float(l['inicio_d'])).alignment  = right
+        ws.cell(row=row, column=4, value=float(l['entradas_g'])).alignment= right
+        ws.cell(row=row, column=5, value=float(l['entradas_d'])).alignment= right
+        ws.cell(row=row, column=6, value=float(l['final_g'])).alignment   = right
+        ws.cell(row=row, column=7, value=float(l['final_d'])).alignment   = right
+        ws.cell(row=row, column=8, value=float(l['saida_g'])).alignment   = right
+        ws.cell(row=row, column=9, value=float(l['saida_d'])).alignment   = right
+        for c in range(1, 10):
             ws.cell(row=row, column=c).border = border
-
         row += 1
 
     # Totais
     if linhas:
         ws.cell(row=row, column=1, value="Total").font = Font(bold=True)
-        ws.cell(row=row, column=2, value=float(totais['geral']['inicio_g'])).font = Font(bold=True)
-        ws.cell(row=row, column=3, value=float(totais['geral']['inicio_d'])).font = Font(bold=True)
-        ws.cell(row=row, column=4, value=float(totais['geral']['entradas_g'])).font = Font(bold=True)
-        ws.cell(row=row, column=5, value=float(totais['geral']['entradas_d'])).font = Font(bold=True)
-        ws.cell(row=row, column=6, value=float(totais['geral']['final_g'])).font = Font(bold=True)
-        ws.cell(row=row, column=7, value=float(totais['geral']['final_d'])).font = Font(bold=True)
-        ws.cell(row=row, column=8, value=float(totais['geral']['saida_g'])).font = Font(bold=True)
-        ws.cell(row=row, column=9, value=float(totais['geral']['saida_d'])).font = Font(bold=True)
-
-        for c in range(1, 9 + 1):
+        ws.cell(row=row, column=2, value=float(totais['geral']['inicio_g'])).font  = Font(bold=True)
+        ws.cell(row=row, column=3, value=float(totais['geral']['inicio_d'])).font  = Font(bold=True)
+        ws.cell(row=row, column=4, value=float(totais['geral']['entradas_g'])).font= Font(bold=True)
+        ws.cell(row=row, column=5, value=float(totais['geral']['entradas_d'])).font= Font(bold=True)
+        ws.cell(row=row, column=6, value=float(totais['geral']['final_g'])).font   = Font(bold=True)
+        ws.cell(row=row, column=7, value=float(totais['geral']['final_d'])).font   = Font(bold=True)
+        ws.cell(row=row, column=8, value=float(totais['geral']['saida_g'])).font   = Font(bold=True)
+        ws.cell(row=row, column=9, value=float(totais['geral']['saida_d'])).font   = Font(bold=True)
+        for c in range(1, 10):
             ws.cell(row=row, column=c).border = border
 
     # Formatação numérica
     int_cols = [2, 4, 6, 8]   # garrafas
     dec_cols = [3, 5, 7, 9]   # doses
     for r in range(5, row + 1):
-        for c in int_cols:
-            ws.cell(row=r, column=c).number_format = '0'
-        for c in dec_cols:
-            ws.cell(row=r, column=c).number_format = '#,##0.00'
+        for c in int_cols: ws.cell(row=r, column=c).number_format = '0'
+        for c in dec_cols: ws.cell(row=r, column=c).number_format = '#,##0.00'
 
     # Auto-largura
-    for col in range(1, 9 + 1):
+    for col in range(1, 10):
         max_len = 0
         for r in range(1, row + 1):
             val = ws.cell(row=r, column=col).value
@@ -2843,10 +2840,13 @@ def exportar_consolidado_periodo_excel(request):
         f"consolidado_{ini_date.strftime('%Y%m%d')}_{ini_time.strftime('%H%M')}"
         f"__{fim_date.strftime('%Y%m%d')}_{fim_time.strftime('%H%M')}.xlsx"
     )
-    resp = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    resp = HttpResponse(
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     resp['Content-Disposition'] = f'attachment; filename="{filename}"'
     wb.save(resp)
     return resp
+
 
 
 

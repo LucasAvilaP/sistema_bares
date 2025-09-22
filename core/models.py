@@ -18,10 +18,24 @@ class Restaurante(models.Model):
 class Bar(models.Model):
     nome = models.CharField(max_length=100)
     restaurante = models.ForeignKey(Restaurante, on_delete=models.CASCADE, related_name='bares')
-    is_estoque_central = models.BooleanField(default=False)  # Este bar será o "estoque" do restaurante
+    is_estoque_central = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['restaurante', 'is_estoque_central'], name='ix_bar_rest_iscentral'),
+        ]
+        constraints = [
+            # Garante no máximo 1 bar central por restaurante
+            models.UniqueConstraint(
+                fields=['restaurante'],
+                condition=Q(is_estoque_central=True),
+                name='uniq_um_central_por_restaurante'
+            )
+        ]
 
     def __str__(self):
         return f"{self.nome} ({self.restaurante.nome})"
+
 
 
 
@@ -76,14 +90,16 @@ class RecebimentoEstoque(models.Model):
     quantidade = models.DecimalField(max_digits=10, decimal_places=2)
     data_recebimento = models.DateTimeField(default=timezone.now)
 
-
     class Meta:
+        ordering = ['-data_recebimento']
         indexes = [
+            # consulta típica do relatório (restaurante + bar + período)
+            models.Index(fields=['restaurante', 'bar', 'data_recebimento'], name='ix_receb_rest_bar_data'),
+            # agregações por produto
+            models.Index(fields=['produto'], name='ix_receb_produto'),
+            # mantenha o seu se usa em outras telas:
             models.Index(fields=['restaurante', 'data_recebimento'], name='ix_receb_rest_data'),
-            # se preferir created_at:
-            # models.Index(fields=['restaurante', 'created_at'], name='ix_receb_rest_created')
         ]
-
 
     def __str__(self):
         return f"{self.produto.nome} - {self.quantidade} un - {self.bar.nome}"
@@ -108,13 +124,22 @@ class TransferenciaBar(models.Model):
 class ContagemBar(models.Model):
     bar = models.ForeignKey(Bar, on_delete=models.CASCADE, related_name='contagens')
     produto = models.ForeignKey(Produto, on_delete=models.CASCADE)
-    
+
     quantidade_garrafas_cheias = models.PositiveIntegerField(default=0)
     quantidade_doses_restantes = models.DecimalField(max_digits=6, decimal_places=2, default=0)
 
     data_contagem = models.DateTimeField(default=timezone.now)
     usuario = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     observacao = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-data_contagem']
+        indexes = [
+            # MUITO importante para "última contagem ≤ data"
+            models.Index(fields=['bar', 'produto', '-data_contagem'], name='ix_cont_bar_prod_dt_desc'),
+            # útil para buscas por produto em geral
+            models.Index(fields=['produto', '-data_contagem'], name='ix_cont_prod_dt_desc'),
+        ]
 
     def __str__(self):
         return f"{self.bar.nome} - {self.produto.nome}"
