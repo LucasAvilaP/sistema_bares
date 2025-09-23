@@ -51,6 +51,10 @@ class Produto(models.Model):
     codigo = models.CharField(max_length=30, unique=True, db_index=True, blank=True, null=True)
     unidade_medida = models.CharField(max_length=20, default='un')
     categoria = models.CharField(max_length=20, choices=CATEGORIAS)
+    controla_estoque_no_bar = models.BooleanField(
+        default=True,
+        help_text="Se desmarcado, perdas serão registradas sem debitar estoque do bar."
+    )
 
     # Existente: opcional, continua útil
     doses_por_garrafa = models.PositiveIntegerField(null=True, blank=True)
@@ -432,7 +436,7 @@ class PerdaProduto(models.Model):
         ('BEBIDA QUENTE', 'Bebida Quente'),
         ('ERRO DE LANÇAMENTO', 'Erro de Lançamento'),
         ('DEVOLUÇÃO DO CLIENTE', 'Devolução do Cliente'),
-        ('CERVEJA CHOCA', 'CERVEJA Choca'),
+        ('CERVEJA CHOCA', 'Cerveja Choca'),
         ('BEBIDA SEM GÁS', 'Bebida Sem Gás'),
         ('QUEBRA AO ABASTECER', 'Quebra ao Abastece'),
         ('QUEBRA NO SALÃO', 'Quebra no Salão'),
@@ -443,6 +447,7 @@ class PerdaProduto(models.Model):
     restaurante = models.ForeignKey(Restaurante, on_delete=models.CASCADE, related_name='perdas')
     bar         = models.ForeignKey(Bar, on_delete=models.CASCADE, related_name='perdas')
     produto     = models.ForeignKey(Produto, on_delete=models.PROTECT, related_name='perdas')
+    sem_baixa = models.BooleanField(default=False)
 
     garrafas = models.PositiveIntegerField(default=0)
     doses    = models.PositiveIntegerField(default=0)
