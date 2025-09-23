@@ -24,7 +24,7 @@
           <option value="">Selecione</option>
           {% for p in produtos %}
             <option value="{{ p.id }}" {% if p.codigo %}data-codigo="{{ p.codigo }}"{% endif %}>
-              {% if p.codigo %} {% endif %}{{ p.nome }}
+              {% if p.codigo %}{% endif %}{{ p.nome }}
             </option>
           {% endfor %}
         </select>
@@ -54,6 +54,18 @@
           <option value="DERRAMAMENTO">Derramamento</option>
           <option value="SOBRA">Descarte de sobra</option>
           <option value="QUALIDADE">Produto impróprio</option>
+          <option value="CONGELADA">Congelada</option>
+          <option value="LATA AMASSADA">Lata amassada</option>
+          <option value="LATA FURADA">Lata furada</option>
+          <option value="VENCIDO">Vencido</option>
+          <option value="BEBIDA QUENTE">Bebida Quente</option>
+          <option value="ERRO DE LANÇAMENTO">Erro de lançamento</option>
+          <option value="DEVOLUÇÃO DO CLIENTE">Devolução do Cliente</option>
+          <option value="CERVEJA CHOCA">Cerveja Choca</option>
+          <option value="BEBIDA SEM GÁS">Bebida sem Gás</option>
+          <option value="QUEBRA AO ABASTECER">Quebra ao Abastecer</option>
+          <option value="QUEBRA NO SALÃO">Quebra no Salão</option>
+          <option value="GARÇOM ABRIU ERRADO">Garçom Abriu Errado</option>
           <option value="OUTRO">Outro</option>
         </select>
       </div>
@@ -92,20 +104,27 @@
 
   <!-- Lista de perdas do dia -->
   <h4 class="mt-4 mb-2">🗂️ Perdas Registradas (hoje)</h4>
-  {% for p in perdas_hoje %}
+    {% for p in perdas_hoje %}
     <div class="card mb-2">
       <div class="card-body d-flex justify-content-between align-items-center">
         <div>
           <strong>{{ p.bar.nome }}</strong> — {{ p.produto.nome }}
           • <span class="text-danger">-{{ p.garrafas }} garrafas, -{{ p.doses }} doses</span>
           • {{ p.get_motivo_display }}
+          {% if p.sem_baixa %}<span class="badge text-bg-warning ms-1">sem baixa</span>{% endif %}
           • {{ p.data_registro|date:"H:i" }}
           {% if p.observacao %} — <em>{{ p.observacao }}</em>{% endif %}
-          <div class="text-muted small">
-            Estoque: {{ p.estoque_antes_garrafas }}→{{ p.estoque_depois_garrafas }} garrafas,
-            {{ p.estoque_antes_doses }}→{{ p.estoque_depois_doses }} doses
+
+          <div class="text-muted small mt-1">
+            {% if p.sem_baixa %}
+              Sem movimentação de estoque neste registro.
+            {% else %}
+              Estoque: {{ p.estoque_antes_garrafas }}→{{ p.estoque_depois_garrafas }} garrafas,
+              {{ p.estoque_antes_doses }}→{{ p.estoque_depois_doses }} doses
+            {% endif %}
           </div>
         </div>
+
         <form method="post" action="{% url 'excluir_perda' p.id %}"
               onsubmit="return confirm('Excluir esta perda e devolver ao estoque?')">
           {% csrf_token %}
@@ -116,6 +135,7 @@
   {% empty %}
     <p class="text-muted">Nenhuma perda registrada hoje.</p>
   {% endfor %}
+
 </div>
 
 <!-- Select2 + estilo -->
