@@ -425,6 +425,18 @@ class PerdaProduto(models.Model):
         ('DERRAMAMENTO', 'Derramamento'),
         ('SOBRA', 'Descarte de sobra'),
         ('QUALIDADE', 'Produto impróprio'),
+        ('CONGELADA', 'Congelada'),
+        ('LATA AMASSADA', 'Lata amassada'),
+        ('LATA FURADA', 'Lata furada'),
+        ('VENCIDO', 'Vencido'),
+        ('BEBIDA QUENTE', 'Bebida Quente'),
+        ('ERRO DE LANÇAMENTO', 'Erro de Lançamento'),
+        ('DEVOLUÇÃO DO CLIENTE', 'Devolução do Cliente'),
+        ('CERVEJA CHOCA', 'CERVEJA Choca'),
+        ('BEBIDA SEM GÁS', 'Bebida Sem Gás'),
+        ('QUEBRA AO ABASTECER', 'Quebra ao Abastece'),
+        ('QUEBRA NO SALÃO', 'Quebra no Salão'),
+        ('GARÇOM ABRIU ERRADO', 'Garçom Abriu Errado'),
         ('OUTRO', 'Outro'),
     )
 
