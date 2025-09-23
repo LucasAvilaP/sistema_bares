@@ -1356,7 +1356,8 @@ def pagina_perdas(request):
 @login_required
 @transaction.atomic
 def registrar_perda(request):
-    """Registra perda debitando do estoque do BAR DA SESSÃO."""
+    """Registra perda debitando do estoque do BAR DA SESSÃO
+       ou apenas como log quando o produto não controla estoque no bar."""
     if request.method != 'POST':
         return redirect('pagina_perdas')
 
@@ -1382,7 +1383,28 @@ def registrar_perda(request):
 
     produto = get_object_or_404(Produto, id=produto_id)
 
-    # captura saldo antes
+    # --- Caso 1: produto NÃO controla estoque no bar -> só log, sem baixa ---
+    if not getattr(produto, 'controla_estoque_no_bar', True):
+        perda = PerdaProduto.objects.create(
+            restaurante=bar.restaurante,
+            bar=bar,
+            produto=produto,
+            garrafas=garrafas,
+            doses=doses,
+            motivo=motivo if motivo in dict(PerdaProduto.MOTIVOS) else 'OUTRO',
+            observacao=observacao,
+            usuario=request.user,
+            # auditoria como zero (não houve débito)
+            estoque_antes_garrafas=Decimal('0'),
+            estoque_antes_doses=Decimal('0'),
+            estoque_depois_garrafas=Decimal('0'),
+            estoque_depois_doses=Decimal('0'),
+            sem_baixa=True,
+        )
+        messages.warning(request, "Perda registrada! Este produto não debita do estoque.")
+        return redirect('pagina_perdas')
+
+    # --- Caso 2: produto controla -> baixa normal com bloqueio se insuficiente ---
     estoque, _ = EstoqueBar.objects.get_or_create(
         bar=bar, produto=produto,
         defaults={'quantidade_garrafas': Decimal('0'), 'quantidade_doses': Decimal('0')}
@@ -1390,7 +1412,6 @@ def registrar_perda(request):
     antes_g = Decimal(estoque.quantidade_garrafas)
     antes_d = Decimal(estoque.quantidade_doses)
 
-    # baixa no estoque (bloqueia se insuficiente)
     ok = EstoqueBar.retirar(
         bar=bar, produto=produto,
         garrafas=Decimal(garrafas), doses=Decimal(doses)
@@ -1399,7 +1420,6 @@ def registrar_perda(request):
         messages.error(request, "Estoque insuficiente para registrar a perda.")
         return redirect('pagina_perdas')
 
-    # recarrega para pegar saldo depois
     estoque = EstoqueBar.objects.get(bar=bar, produto=produto)
     depois_g = Decimal(estoque.quantidade_garrafas)
     depois_d = Decimal(estoque.quantidade_doses)
@@ -1417,10 +1437,12 @@ def registrar_perda(request):
         estoque_antes_doses=antes_d,
         estoque_depois_garrafas=depois_g,
         estoque_depois_doses=depois_d,
+        sem_baixa=False,
     )
 
     messages.success(request, "Perda registrada e descontada do estoque do seu bar.")
     return redirect('pagina_perdas')
+
 
 @login_required
 @transaction.atomic
@@ -2384,16 +2406,6 @@ def relatorio_perdas(request):
 
 
 
-
-#from collections import defaultdict
-from decimal import Decimal
-from datetime import datetime, time, timedelta
-
-from django.db.models import Sum
-from django.utils import timezone
-from django.contrib import messages
-from django.contrib.auth.decorators import login_required
-from django.shortcuts import render, get_object_or_404, redirect
 
 # helpers que você já tem
 def _parse_date(s, default_date):
