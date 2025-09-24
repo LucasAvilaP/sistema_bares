@@ -2014,7 +2014,7 @@ def relatorio_eventos(request):
     nome_evento = (request.GET.get('nome_evento') or "").strip()
     somente_nao_baixados = request.GET.get('pendentes') == '1'
 
-    # 🔹 NOVO: filtro por restaurante
+    # 🔹 filtro por restaurante
     restaurante_param = (request.GET.get('restaurante') or '').strip()
     try:
         restaurante_filtro_id = int(restaurante_param) if restaurante_param else None
@@ -2032,12 +2032,13 @@ def relatorio_eventos(request):
         data_inicio = date.today().replace(day=1)
         data_fim = date.today()
 
+    # 🔁 AGORA filtra e ordena pela DATA DO EVENTO
     eventos_qs = (
         Evento.objects
-        .filter(data_criacao__date__range=(data_inicio, data_fim))
+        .filter(data_evento__range=(data_inicio, data_fim))
         .prefetch_related('produtos__produto', 'alimentos__alimento')
-        .select_related('responsavel', 'supervisor_finalizou', 'baixado_por', 'restaurante')  # 👈 inclui restaurante
-        .order_by('-data_criacao')
+        .select_related('responsavel', 'supervisor_finalizou', 'baixado_por', 'restaurante')
+        .order_by('-data_evento', '-finalizado_em', '-data_criacao')
     )
     if nome_evento:
         eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
@@ -2046,30 +2047,28 @@ def relatorio_eventos(request):
     if restaurante_filtro_id:
         eventos_qs = eventos_qs.filter(restaurante_id=restaurante_filtro_id)
 
-    # ✅ dois consolidados: bebidas e alimentos
+    # ✅ consolidados
     consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
     consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
 
     eventos = []
     for ev in eventos_qs:
-        # --- bebidas (por evento)
+        # --- bebidas
         total_g, total_d, total_ml = 0, Decimal('0'), Decimal('0')
         itens_bebidas = []
         for item in ev.produtos.all():
             g = int(item.garrafas or 0)
             d = Decimal(item.doses or 0)
             ml = d * DOSE_ML
-
             itens_bebidas.append({'produto': item.produto.nome, 'garrafas': g, 'doses': d, 'ml': ml})
             total_g += g; total_d += d; total_ml += ml
 
-            # consolida
             nome_prod = item.produto.nome
             consolidado_bebidas[nome_prod]['garrafas'] += g
             consolidado_bebidas[nome_prod]['doses'] += d
             consolidado_bebidas[nome_prod]['ml'] += ml
 
-        # --- alimentos (por evento)
+        # --- alimentos
         itens_alimentos = []
         total_qtd_alimentos = Decimal('0')
         for ali in ev.alimentos.all():
@@ -2079,30 +2078,25 @@ def relatorio_eventos(request):
             itens_alimentos.append({'alimento': nome, 'quantidade': qtd, 'unidade': uni})
             total_qtd_alimentos += qtd
 
-            # consolida
             consolidado_alimentos[nome]['quantidade'] += qtd
             consolidado_alimentos[nome]['unidade'] = uni
 
         eventos.append({
             'obj': ev,
-            'data': localtime(ev.data_criacao),
+            'data': ev.data_evento,  # << usar a DATA DO EVENTO
             'responsavel': getattr(ev, 'responsavel', ''),
-            # ✅ novos campos:
             'pessoas': ev.numero_pessoas,
             'horas': ev.horas,
-            'restaurante_nome': ev.restaurante.nome if getattr(ev, 'restaurante', None) else None,  # 👈 para exibir facilmente
-            # blocos:
+            'restaurante_nome': ev.restaurante.nome if getattr(ev, 'restaurante', None) else None,
             'itens_bebidas': itens_bebidas,
             'totais_bebidas': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
             'itens_alimentos': itens_alimentos,
             'total_qtd_alimentos': total_qtd_alimentos,
         })
 
-    # ordenações amigáveis
     consolidado_bebidas = OrderedDict(sorted(consolidado_bebidas.items(), key=lambda kv: kv[0].lower()))
     consolidado_alimentos = OrderedDict(sorted(consolidado_alimentos.items(), key=lambda kv: kv[0].lower()))
 
-    # 🔹 lista para o dropdown
     restaurantes = Restaurante.objects.all().order_by('nome')
 
     return render(request, 'core/relatorios/relatorio_eventos.html', {
@@ -2113,9 +2107,10 @@ def relatorio_eventos(request):
         'data_fim': data_fim,
         'nome_evento': nome_evento,
         'somente_nao_baixados': '1' if somente_nao_baixados else '',
-        'restaurantes': restaurantes,                    # 👈 para o filtro
-        'selected_restaurante': restaurante_filtro_id,   # 👈 para marcar selecionado
+        'restaurantes': restaurantes,
+        'selected_restaurante': restaurante_filtro_id,
     })
+
 
 
 
@@ -3013,8 +3008,8 @@ def style_body_borders(ws, r1, r2, c1, c2):
 @login_required
 def exportar_relatorio_eventos_excel(request):
     data_inicio_str = request.GET.get('data_inicio') or ""
-    data_fim_str = request.GET.get('data_fim') or ""
-    nome_evento = (request.GET.get('nome_evento') or "").strip()
+    data_fim_str    = request.GET.get('data_fim') or ""
+    nome_evento     = (request.GET.get('nome_evento') or "").strip()
 
     # 🔹 filtro por restaurante
     restaurante_param = (request.GET.get('restaurante') or '').strip()
@@ -3027,20 +3022,21 @@ def exportar_relatorio_eventos_excel(request):
     if data_inicio_str and data_fim_str:
         try:
             data_inicio = datetime.strptime(data_inicio_str, "%Y-%m-%d").date()
-            data_fim = datetime.strptime(data_fim_str, "%Y-%m-%d").date()
+            data_fim    = datetime.strptime(data_fim_str, "%Y-%m-%d").date()
         except (TypeError, ValueError):
             data_inicio = date.today().replace(day=1)
-            data_fim = date.today()
+            data_fim    = date.today()
     else:
         data_inicio = date.today().replace(day=1)
-        data_fim = date.today()
+        data_fim    = date.today()
 
+    # ✅ USANDO DATA DO EVENTO
     eventos_qs = (
         Evento.objects
-        .filter(data_criacao__date__range=(data_inicio, data_fim))
+        .filter(data_evento__range=(data_inicio, data_fim))
         .prefetch_related('produtos__produto', 'alimentos__alimento')
         .select_related('responsavel', 'restaurante')
-        .order_by('-data_criacao')
+        .order_by('-data_evento', '-finalizado_em', '-data_criacao')
     )
     if nome_evento:
         eventos_qs = eventos_qs.filter(nome__icontains=nome_evento)
@@ -3059,10 +3055,10 @@ def exportar_relatorio_eventos_excel(request):
             filtro_txt += " | Restaurante: (inválido)"
 
     # Consolidações
-    consolidado_bebidas = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
+    consolidado_bebidas   = defaultdict(lambda: {'garrafas': 0, 'doses': Decimal('0'), 'ml': Decimal('0')})
     consolidado_alimentos = defaultdict(lambda: {'quantidade': Decimal('0.00'), 'unidade': ''})
 
-    # Linhas detalhadas
+    # Linhas detalhadas (Data agora = data_evento)
     detalhado = []  # Evento, Restaurante, Data, Pessoas, Horas, Tipo, Item, Garrafas, Doses, ML, Quantidade, Unidade
 
     # Agrupado por evento (para as abas "Por Evento" e "Eventos (lista)")
@@ -3080,18 +3076,18 @@ def exportar_relatorio_eventos_excel(request):
         # ---- Bebidas
         for item in ev.produtos.all():
             prod = item.produto.nome
-            gar = int(item.garrafas or 0)
-            dos = Decimal(item.doses or 0)
-            ml = dos * DOSE_ML
+            gar  = int(item.garrafas or 0)
+            dos  = Decimal(item.doses or 0)
+            ml   = dos * DOSE_ML
 
             consolidado_bebidas[prod]['garrafas'] += gar
-            consolidado_bebidas[prod]['doses'] += dos
-            consolidado_bebidas[prod]['ml'] += ml
+            consolidado_bebidas[prod]['doses']    += dos
+            consolidado_bebidas[prod]['ml']       += ml
 
             detalhado.append({
                 'evento': ev.nome,
                 'restaurante': rnome,
-                'data': localtime(ev.data_criacao),
+                'data': ev.data_evento,  # ✅ DATA DO EVENTO
                 'pessoas': ev.numero_pessoas,
                 'horas': ev.horas,
                 'tipo': 'Bebida',
@@ -3111,16 +3107,16 @@ def exportar_relatorio_eventos_excel(request):
         # ---- Alimentos
         for ali in ev.alimentos.all():
             nome = ali.alimento.nome
-            qtd = Decimal(ali.quantidade or 0)
-            uni = ali.alimento.unidade or ''
+            qtd  = Decimal(ali.quantidade or 0)
+            uni  = ali.alimento.unidade or ''
 
             consolidado_alimentos[nome]['quantidade'] += qtd
-            consolidado_alimentos[nome]['unidade'] = uni
+            consolidado_alimentos[nome]['unidade']     = uni
 
             detalhado.append({
                 'evento': ev.nome,
                 'restaurante': rnome,
-                'data': localtime(ev.data_criacao),
+                'data': ev.data_evento,  # ✅ DATA DO EVENTO
                 'pessoas': ev.numero_pessoas,
                 'horas': ev.horas,
                 'tipo': 'Alimento',
@@ -3137,7 +3133,7 @@ def exportar_relatorio_eventos_excel(request):
 
         eventos_group.append({
             'nome': ev.nome,
-            'data': localtime(ev.data_criacao),
+            'data': ev.data_evento,  # ✅ DATA DO EVENTO
             'responsavel': getattr(ev, 'responsavel', ''),
             'pessoas': ev.numero_pessoas,
             'horas': ev.horas,
@@ -3147,7 +3143,7 @@ def exportar_relatorio_eventos_excel(request):
             'itens_bebidas': itens_ev_bebidas,
             'totais_bebidas': {'garrafas': total_g, 'doses': total_d, 'ml': total_ml},
             'itens_alimentos': itens_ev_alimentos,
-            'total_alimentos_qtd': total_qtd_alimentos_evento,  # 👈 para a aba de lista
+            'total_alimentos_qtd': total_qtd_alimentos_evento,
         })
 
     # === Workbook
@@ -3231,7 +3227,8 @@ def exportar_relatorio_eventos_excel(request):
     for linha in detalhado:
         ws2.cell(row=r2, column=1, value=linha['evento'])
         ws2.cell(row=r2, column=2, value=linha['restaurante'] or "-")
-        ws2.cell(row=r2, column=3, value=linha['data'].strftime("%d/%m/%Y %H:%M"))
+        # ✅ data_evento (somente data)
+        ws2.cell(row=r2, column=3, value=linha['data'].strftime("%d/%m/%Y"))
 
         if linha['pessoas'] is not None:
             ws2.cell(row=r2, column=4, value=int(linha['pessoas'])).number_format = "0"
@@ -3265,7 +3262,7 @@ def exportar_relatorio_eventos_excel(request):
     # ===================== Aba 4: Por Evento =====================
     ws3 = wb.create_sheet("Por Evento")
 
-    col_count = 8
+    col_count   = 8
     current_row = 1
 
     ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
@@ -3277,7 +3274,8 @@ def exportar_relatorio_eventos_excel(request):
 
     for ev in eventos_group:
         ws3.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=col_count)
-        cab = f"Evento: {ev['nome']}  |  Data: {ev['data'].strftime('%d/%m/%Y %H:%M')}"
+        # ✅ data_evento (somente data)
+        cab = f"Evento: {ev['nome']}  |  Data: {ev['data'].strftime('%d/%m/%Y')}"
         if ev['responsavel']:
             cab += f"  |  Resp.: {ev['responsavel']}"
         if ev.get('pessoas') is not None:
@@ -3352,7 +3350,8 @@ def exportar_relatorio_eventos_excel(request):
     for ev in eventos_group:
         wsL.cell(row=rL, column=1, value=ev['nome'])
         wsL.cell(row=rL, column=2, value=ev['restaurante_nome'] or "-")
-        wsL.cell(row=rL, column=3, value=ev['data'].strftime("%d/%m/%Y %H:%M"))
+        # ✅ data_evento (somente data)
+        wsL.cell(row=rL, column=3, value=ev['data'].strftime("%d/%m/%Y"))
         wsL.cell(row=rL, column=4, value=ev['status'])
         wsL.cell(row=rL, column=5, value="Sim" if ev['baixado'] else "Não")
         wsL.cell(row=rL, column=6, value=str(ev['responsavel']) if ev['responsavel'] else "-")
@@ -3372,7 +3371,6 @@ def exportar_relatorio_eventos_excel(request):
 
         rL += 1
 
-    # Linha de total de eventos
     wsL.append([])
     wsL.cell(row=rL + 1, column=1, value="Total de eventos").font = Font(bold=True)
     wsL.cell(row=rL + 1, column=2, value=len(eventos_group)).number_format = "0"
@@ -3393,6 +3391,7 @@ def exportar_relatorio_eventos_excel(request):
     )
     resp['Content-Disposition'] = f'attachment; filename="{fname}"'
     return resp
+
 
 
 

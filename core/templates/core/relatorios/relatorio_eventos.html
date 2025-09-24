@@ -127,7 +127,7 @@
           <div class="d-flex flex-column flex-md-row gap-2 align-items-start align-items-md-center">
             <div>
               <strong>{{ ev.nome }}</strong>
-              — {{ e.data|date:"d/m/Y H:i" }}
+              {{ e.data|date:"d/m/Y" }} 
               {% if e.responsavel %} por {{ e.responsavel }}{% endif %}
               {% if e.restaurante_nome %}
                 <span class="badge bg-info text-dark ms-1">🏛️ {{ e.restaurante_nome }}</span>
