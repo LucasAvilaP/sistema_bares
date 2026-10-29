@@ -2,6 +2,24 @@
 {% load custom_filters %}
 {% load l10n %}
 {% block content %}
+
+<!-- CSS do Select2 para estilização do campo de busca -->
+<link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+<style>
+  /* Pequeno ajuste para o Select2 ficar com a mesma altura dos inputs do Bootstrap */
+  .select2-container .select2-selection--single {
+    height: 38px !important;
+    border: 1px solid #dee2e6 !important;
+    border-radius: 0.375rem !important;
+  }
+  .select2-container--default .select2-selection--single .select2-selection__rendered {
+    line-height: 36px !important;
+  }
+  .select2-container--default .select2-selection--single .select2-selection__arrow {
+    height: 36px !important;
+  }
+</style>
+
 <div class="container">
   <h2 class="mb-3">🛠️ Editar / Finalizar Evento</h2>
 
@@ -148,7 +166,8 @@
         <select name="novo_alimento" class="form-select">
           <option value="">Selecione</option>
           {% for a in alimentos %}
-            <option value="{{ a.id }}">[{{ a.codigo }}] {{ a.nome }} ({{ a.get_unidade_display }})</option>
+            <!-- title exibe o nome completo no hover, truncatechars evita sobrecarga no DOM html -->
+            <option value="{{ a.id }}" title="{{ a.nome }}">[{{ a.codigo }}] {{ a.nome|truncatechars:120 }} ({{ a.get_unidade_display }})</option>
           {% endfor %}
         </select>
       </div>
@@ -165,9 +184,15 @@
   </form>
 </div>
 
-<!-- UX opcional: esmaece e desabilita inputs quando marcar "remover" -->
+<!-- Importação do jQuery (necessário para o Select2) e JS do Select2 -->
+<!-- OBS: Se o seu base.html já importar o jQuery, você pode remover a linha abaixo do jquery.min.js -->
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+<!-- UX opcional: esmaece e desabilita inputs quando marcar "remover" + Inicialização do Select2 -->
 <script>
   (function () {
+    // Lógica original de remover itens
     const toggles = document.querySelectorAll('.del-toggle');
     toggles.forEach(function (chk) {
       const tr = chk.closest('tr');
@@ -186,6 +211,19 @@
       chk.addEventListener('change', applyState);
       // estado inicial (caso browser recupere estado do form)
       applyState();
+    });
+
+    // Lógica do Select2
+    $(document).ready(function() {
+        $('select[name="novo_alimento"]').select2({
+            width: '100%', 
+            placeholder: 'Busque ou selecione um alimento'
+        });
+        
+        $('select[name="novo_produto"]').select2({
+            width: '100%',
+            placeholder: 'Busque ou selecione uma bebida'
+        });
     });
   })();
 </script>
